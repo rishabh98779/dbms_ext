@@ -1,0 +1,471 @@
+<h2 id="p3-d"><span class="num">D.</span>Database Recovery</h2>
+<p class="small">Neither MySQL nor Oracle lets you switch on deferred modification, shadow paging or a manual UNDO/REDO pass. Questions D-01 to D-04 and D-23 are <span class="pill exe">Executable</span> (real transaction failure and rollback); D-05 onwards are <span class="pill man">Manual</span> paper simulations of the recovery algorithms. Log notation is in Part&nbsp;1 §D.2. Initial values are given in each question.</p>
+
+<h3>D.1 — Executable: transaction failure and rollback</h3>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-01</span><span class="q-title">Statement-level UNDO after a constraint failure</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <pre>UPDATE u3_account SET balance = balance - 1000;   <span class="c-err">-- ERROR 3819: Check constraint 'chk_bal' is violated.</span>
+SELECT * FROM u3_account;                          <span class="c-ok">-- 10000, 5000, 20000, 800 (nothing changed)</span>
+
+START TRANSACTION;
+UPDATE u3_account SET balance = balance - 100 WHERE acc_no = 101;
+UPDATE u3_account SET balance = balance - 1000;                 <span class="c-err">-- fails again</span>
+SELECT * FROM u3_account;                          <span class="c-ok">-- 101 = 9900, others unchanged</span>
+ROLLBACK;
+SELECT * FROM u3_account;                          <span class="c-ok">-- 101 = 10000</span></pre>
+    <div class="answer"><b>Expected.</b> The failed multi-row statement is undone as a unit, including rows changed
+    before 104 failed. The earlier 100 debit survives because only the <b>statement</b> was rolled back, not the
+    transaction — the final ROLLBACK/COMMIT decides its fate. <em>Oracle:</em> same statements, error
+    <code>ORA-02290: check constraint (…CHK_BAL) violated</code>.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-02</span><span class="q-title">Limits of ROLLBACK — implicit commit by DDL</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <pre>START TRANSACTION;                                    <span class="c-com">-- Oracle: omit</span>
+UPDATE u3_account SET balance = balance - 100 WHERE acc_no = 101;
+CREATE TABLE u3_tmp (x INT);                          <span class="c-com">-- Oracle: x NUMBER</span>
+ROLLBACK;
+SELECT balance FROM u3_account WHERE acc_no = 101;    <span class="c-ok">-- 9900, NOT 10000</span></pre>
+    <div class="answer"><b>Expected: 9900.</b> DDL commits the open transaction implicitly in both databases, so the
+    debit was already committed before ROLLBACK, which then had nothing to undo. Clean up with
+    <code>DROP TABLE u3_tmp;</code> and restore 101 to 10,000.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-03</span><span class="q-title">Abrupt termination — where MySQL and Oracle differ</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>MySQL.</b> A begins and debits 101 by 500. B runs <code>KILL &lt;A's connection id&gt;;</code>.
+    Then B reads 101 and debits it by 100; A runs any statement.</p>
+    <pre>SELECT balance FROM u3_account WHERE acc_no = 101;                 <span class="c-ok">-- 10000</span>
+UPDATE u3_account SET balance = balance - 100 WHERE acc_no = 101;  <span class="c-ok">-- does not block (once rollback finishes)</span>
+<span class="c-com">-- A:</span> SELECT 1;  <span class="c-err">-- error such as 2006 "server has gone away" or 2013 "Lost connection"</span></pre>
+    <p><b>Oracle.</b> Debit 101 by 500 (uncommitted), then run an anonymous block that debits 102 by 100 and then
+    debits 104 by 1,000 (violating <code>chk_bal</code>) with no exception handler.</p>
+    <pre>SELECT acc_no, balance FROM u3_account WHERE acc_no IN (101,102);  <span class="c-ok">-- 9500, 5000</span>
+ROLLBACK;
+SELECT acc_no, balance FROM u3_account WHERE acc_no IN (101,102);  <span class="c-ok">-- 10000, 5000</span></pre>
+    <div class="answer"><b>Key difference.</b> MySQL's KILL rolls back the <b>entire</b> transaction of the killed
+    session, so B reads 10000. In Oracle the failed block's own changes (the 102 debit) are undone, while the earlier
+    statement <b>outside</b> the block stays pending until your ROLLBACK. Error text:
+    <code>ORA-02290</code> (shown with <code>ORA-06512</code> for the block).</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-04</span><span class="q-title">Observing write-ahead log activity</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <pre>SHOW VARIABLES LIKE 'innodb_flush_log_at_trx_commit';        <span class="c-ok">-- 1 by default</span>
+SHOW ENGINE INNODB STATUS\G                                  <span class="c-com">-- LOG section: Log sequence number N1</span>
+UPDATE u3_account SET balance = balance - 1 WHERE acc_no = 101; COMMIT;
+SHOW ENGINE INNODB STATUS\G                                  <span class="c-com">-- N2 &gt; N1</span>
+START TRANSACTION; UPDATE u3_account SET balance = balance - 1 WHERE acc_no = 101; ROLLBACK;
+SHOW ENGINE INNODB STATUS\G                                  <span class="c-com">-- N3 ≥ N2</span></pre>
+    <div class="answer"><b>Expected.</b> The flush variable is <b>1</b> and the log sequence number increases after the
+    commit. After a rolled-back change it normally still increases, because InnoDB logs the change and its undo.
+    <em>Oracle:</em> <code>SELECT acc_no, balance, ORA_ROWSCN FROM u3_account;</code> — ORA_ROWSCN for the block holding
+    101 is larger after the commit. By default it has block-level granularity, so rows in the same block may share a
+    value. <code>V$LOG</code> views need privileges and are omitted.</div>
+  </div>
+</div>
+
+<h3>D.2 — Manual recovery drills (the algorithms on paper)</h3>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-05 · U3-D-06</span><span class="q-title">Deferred vs immediate modification — the two basic drills</span><span class="q-tags"><span class="pill lvl">L1</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>U3-D-05 (deferred, REDO only).</b> Initial A=100, B=200, C=300.</p>
+    <pre>1 &lt;T1,start&gt;   2 &lt;T1,A,150&gt;   3 &lt;T2,start&gt;
+4 &lt;T2,B,250&gt;   5 &lt;T1,commit&gt;  6 &lt;T2,C,350&gt;   CRASH</pre>
+    <div class="answer"><b>REDO: T1. Ignore: T2</b> (no commit record). <b>Final: A = 150, B = 200, C = 300.</b>
+    Under deferred modification there is no UNDO — T2's writes were never applied.</div>
+    <p><b>U3-D-06 (immediate, UNDO then REDO).</b> Initial A=100, B=200, C=300.</p>
+    <pre>1 &lt;T1,start&gt;  2 &lt;T1,A,100,150&gt;  3 &lt;T1,commit&gt;
+4 &lt;T2,start&gt;  5 &lt;T2,B,200,250&gt;  6 &lt;T2,C,300,350&gt;   CRASH</pre>
+    <div class="answer"><b>UNDO list: T2. REDO list: T1.</b> UNDO backward: entry 6 → C = 300; entry 5 → B = 200.
+    REDO forward: entry 2 → A = 150. <b>Final: A = 150, B = 200, C = 300.</b></div>
+    <p><b>U3-D-12 — the same execution logged both ways.</b> T1 writes A = 150, B = 250 and commits; T2 writes
+    C = 350, D = 450 and never commits; T3 writes E = 550 and commits.</p>
+    <table>
+      <thead><tr><th>Log type</th><th class="c">Log records</th><th class="c">UNDO ops</th><th class="c">REDO write ops</th></tr></thead>
+      <tbody>
+        <tr><td>Deferred <span class="mono">&lt;T1,A,150&gt; …</span></td><td class="c">10</td><td class="c">0</td><td class="c">3 (A, B, E)</td></tr>
+        <tr><td>Immediate <span class="mono">&lt;T1,A,100,150&gt; …</span></td><td class="c">10</td><td class="c">2 (D then C)</td><td class="c">3 (A, B, E)</td></tr>
+      </tbody>
+    </table>
+    <div class="answer">Both give <b>A = 150, B = 250, C = 300, D = 400, E = 550</b>. Deferred modification never needs
+    an undo, because T2's writes were never applied.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-07</span><span class="q-title">Deferred modification — five crash points</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <pre>Initial: A=100, B=200, C=300, D=400.  Deferred modification.
+1 &lt;T1,start&gt;     2 &lt;T1,A,110&gt;    3 &lt;T2,start&gt;    4 &lt;T2,B,220&gt;
+5 &lt;T1,C,330&gt;     6 &lt;T1,commit&gt;   7 &lt;T3,start&gt;    8 &lt;T3,D,440&gt;
+9 &lt;T2,commit&gt;   10 &lt;T3,A,120&gt;   11 &lt;T3,commit&gt;</pre>
+    <table>
+      <thead><tr><th class="c">Crash after</th><th>REDO list</th><th class="c">A</th><th class="c">B</th><th class="c">C</th><th class="c">D</th></tr></thead>
+      <tbody>
+        <tr><td class="c">4</td><td>none</td><td class="c">100</td><td class="c">200</td><td class="c">300</td><td class="c">400</td></tr>
+        <tr><td class="c">6</td><td>T1</td><td class="c">110</td><td class="c">200</td><td class="c">330</td><td class="c">400</td></tr>
+        <tr><td class="c">8</td><td>T1</td><td class="c">110</td><td class="c">200</td><td class="c">330</td><td class="c">400</td></tr>
+        <tr><td class="c">9</td><td>T1, T2</td><td class="c">110</td><td class="c">220</td><td class="c">330</td><td class="c">400</td></tr>
+        <tr><td class="c">11</td><td>T1, T2, T3</td><td class="c">120</td><td class="c">220</td><td class="c">330</td><td class="c">440</td></tr>
+      </tbody>
+    </table>
+    <div class="answer">At the crash after 11, A is written first by T1 (110) then by T3 (120), so <b>log order gives
+    A = 120</b>.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-08</span><span class="q-title">Immediate modification — four crash points</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <pre>Initial: A=100, B=200, C=300, D=400.
+1 &lt;T1,start&gt;      2 &lt;T1,A,100,110&gt;  3 &lt;T2,start&gt;     4 &lt;T2,B,200,220&gt;
+5 &lt;T1,C,300,330&gt;  6 &lt;T1,commit&gt;     7 &lt;T3,start&gt;     8 &lt;T3,D,400,440&gt;
+9 &lt;T2,commit&gt;    10 &lt;T3,A,110,120&gt; 11 &lt;T3,commit&gt;</pre>
+    <table>
+      <thead><tr><th class="c">Crash after</th><th>UNDO list</th><th>REDO list</th><th class="c">A</th><th class="c">B</th><th class="c">C</th><th class="c">D</th></tr></thead>
+      <tbody>
+        <tr><td class="c">5</td><td>T1, T2</td><td>none</td><td class="c">100</td><td class="c">200</td><td class="c">300</td><td class="c">400</td></tr>
+        <tr><td class="c">8</td><td>T2, T3</td><td>T1</td><td class="c">110</td><td class="c">200</td><td class="c">330</td><td class="c">400</td></tr>
+        <tr><td class="c">10</td><td>T3</td><td>T1, T2</td><td class="c">110</td><td class="c">220</td><td class="c">330</td><td class="c">400</td></tr>
+        <tr><td class="c">11</td><td>none</td><td>T1, T2, T3</td><td class="c">120</td><td class="c">220</td><td class="c">330</td><td class="c">440</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Crash after 10 — A trace.</b> The undo restores D = 400 (entry 8) then A = 110 (entry 10's
+    old value, which is T1's committed value, not the original 100). Redo T1 sets A = 110 again, so <b>A ends at
+    110</b>.</div>
+    <p class="small"><b>Related (U3-D-16, crash during recovery — repeatability).</b> Using the log of U3-D-08 up to entry 10 with disk state A = 120, B = 200, C = 330, D = 440: recovery undoes T3 and redoes T1 and T2, giving <b>A = 110, B = 220, C = 330, D = 400</b> — 3 items differ from the crash disk state (A, B, D). Crashing again after the UNDO phase (disk A = 110, B = 200, C = 330, D = 400) and running recovery from scratch gives the same final state, as does starting from A = 110, B = 220, C = 330, D = 400. Undo and redo write absolute values, so repeating them does not change the result.</p>
+
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-09</span><span class="q-title">UNDO-only logging</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <pre>Initial: A=5, B=6, C=7.  UNDO-only: every write reaches disk before its commit record.
+1 &lt;T1,start&gt;  2 &lt;T1,A,5&gt;  3 &lt;T2,start&gt;  4 &lt;T2,B,6&gt;
+5 &lt;T1,commit&gt; 6 &lt;T3,start&gt; 7 &lt;T3,A,55&gt;  8 &lt;T2,C,7&gt;   CRASH
+Disk state at crash: A=59, B=66, C=77.</pre>
+    <div class="answer"><b>UNDO list: T2, T3</b> (T1 committed). Undo backward: entry 8 → C = 7; entry 7 → A = 55;
+    entry 4 → B = 6. <b>Final: A = 55, B = 6, C = 7.</b> T1's committed A = 55 survives, and T3's A = 59 is reverted to
+    55 rather than 5 — the old value is taken from the log, not the original.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-10</span><span class="q-title">Checkpoint recovery — deferred modification</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <pre>Initial: A=10, B=20, C=30, D=40, E=50.  Deferred modification.  Disk at crash: A=11, B=20, C=30, D=40, E=50.
+1 &lt;T1,start&gt;  2 &lt;T1,A,11&gt;  3 &lt;T1,commit&gt;  4 &lt;T2,start&gt;  5 &lt;T2,B,21&gt;  6 &lt;T3,start&gt;  7 &lt;T3,C,31&gt;
+8 &lt;checkpoint {T2,T3}&gt;  9 &lt;T2,D,41&gt;  10 &lt;T2,commit&gt;  11 &lt;T4,start&gt;  12 &lt;T4,E,51&gt;  13 &lt;T3,A,12&gt;  14 &lt;T4,commit&gt;   CRASH</pre>
+    <div class="answer">
+      <b>REDO list:</b> T2 (in the checkpoint list, committed) and T4 (started after, committed).
+      <b>Ignored:</b> T1 (committed before the checkpoint) and T3 (never committed).<br>
+      <b>Redo scan starts at entry 4</b> (&lt;T2,start&gt;): T2 was active at the checkpoint and, under deferred
+      modification, none of its writes are on disk, so its pre-checkpoint write at entry 5 must be redone.<br>
+      Redo T2 → B = 21, D = 41; redo T4 → E = 51.
+      <b>Final: A = 11, B = 21, C = 30, D = 41, E = 51.</b> T3's writes (C = 31, A = 12) are not applied.
+    </div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-11</span><span class="q-title">Checkpoint recovery — immediate modification</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <pre>Initial: A=100, B=200, C=300, D=400, E=500.
+1 &lt;T1,start&gt;  2 &lt;T1,A,100,150&gt;  3 &lt;T1,commit&gt;  4 &lt;T2,start&gt;  5 &lt;T2,B,200,250&gt;  6 &lt;T3,start&gt;  7 &lt;T3,C,300,350&gt;
+8 &lt;checkpoint {T2,T3}&gt;  9 &lt;T2,B,250,260&gt;  10 &lt;T2,commit&gt;  11 &lt;T3,D,400,450&gt;  12 &lt;T4,start&gt;  13 &lt;T4,E,500,550&gt;   CRASH</pre>
+    <div class="answer">
+      <b>UNDO list: T3, T4. REDO list: T2.</b> <b>Ignored: T1</b> (committed before the checkpoint, A = 150 already on disk).<br>
+      Undo in order: entry 13 → E = 500; entry 11 → D = 400; entry 7 → C = 300.
+      <b>Scan limit:</b> the backward scan must continue to <b>entry 6</b> (&lt;T3,start&gt;), the earliest start record among
+      the undo list (T4's start is entry 12).<br>
+      Redo T2: entry 5 sets B = 250, then entry 9 sets B = 260. Redoing from the checkpoint onward gives the same B,
+      because redo is idempotent and the checkpoint already flushed B = 250.
+      <b>Final: A = 150, B = 260, C = 300, D = 400, E = 500.</b>
+    </div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-13</span><span class="q-title">Rollback with compensation records</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <pre>Initial: A=1, B=2, C=3, D=4.  Immediate modification.
+1 &lt;T1,start&gt;  2 &lt;T2,start&gt;  3 &lt;T2,A,1,10&gt;  4 &lt;T1,B,2,20&gt;  5 &lt;T3,start&gt;
+6 &lt;T2,C,3,30&gt; 7 &lt;T3,D,4,40&gt; 8 &lt;T2,A,10,100&gt;  9 T2 FAILS (transaction failure, no crash)</pre>
+    <div class="answer">
+      <b>(a) Rollback.</b> Compensation records, backward: <code>&lt;T2,A,10&gt;</code>, <code>&lt;T2,C,3&gt;</code>,
+      <code>&lt;T2,A,1&gt;</code>, then <code>&lt;T2,abort&gt;</code>. A trace: 100 → 10 → 1. T1 and T3 then commit →
+      <b>final A = 1, B = 20, C = 3, D = 40</b>.<br>
+      <b>(b) Crash after <code>&lt;T2,C,3&gt;</code>.</b> The redo pass repeats history (including the two compensation
+      records). The undo pass finds T1, T2 and T3 without commit or abort. Undoing T2's entries again (A = 10, C = 3,
+      A = 1) is harmless, because old values are absolute. T3's undo sets D = 4 and T1's undo sets B = 2.
+      <b>Final: A = 1, B = 2, C = 3, D = 4</b> (the initial state).
+    </div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-14</span><span class="q-title">Classifying REDO / UNDO / IGNORE with a checkpoint</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <pre>Initial: A=B=C=D=E=F=1.  Every write sets the item to 2.  Immediate modification.
+1 &lt;T1,start&gt;  2 &lt;T1,A,1,2&gt;  3 &lt;T2,start&gt;  4 &lt;T2,B,1,2&gt;  5 &lt;T1,commit&gt;
+6 &lt;checkpoint {T2}&gt;  7 &lt;T3,start&gt;  8 &lt;T3,C,1,2&gt;  9 &lt;T2,commit&gt;
+10 &lt;T4,start&gt; 11 &lt;T4,D,1,2&gt; 12 &lt;T3,commit&gt; 13 &lt;T5,start&gt; 14 &lt;T5,E,1,2&gt;
+15 &lt;T4,abort&gt; 16 &lt;T6,start&gt; 17 &lt;T6,F,1,2&gt; 18 &lt;T6,commit&gt;  CRASH</pre>
+    <table>
+      <thead><tr><th class="c">Txn</th><th class="c">Action</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td class="c">T1</td><td class="c">IGNORE</td><td>Committed before the checkpoint, so already on disk</td></tr>
+        <tr><td class="c">T2</td><td class="c">REDO</td><td>In the checkpoint list and committed (entry 9)</td></tr>
+        <tr><td class="c">T3</td><td class="c">REDO</td><td>Committed (entry 12)</td></tr>
+        <tr><td class="c">T4</td><td class="c">IGNORE</td><td>Abort record: rollback already complete</td></tr>
+        <tr><td class="c">T5</td><td class="c">UNDO</td><td>Started, no commit or abort</td></tr>
+        <tr><td class="c">T6</td><td class="c">REDO</td><td>Committed (entry 18)</td></tr>
+      </tbody>
+    </table>
+    <div class="answer">Undo list: T5, which restores E = 1 (entry 14). <b>Final: A = 2, B = 2, C = 2, D = 1, E = 1,
+    F = 2.</b>
+    <p class="small"><b>Related (U3-D-27) — six crash points, immediate modification.</b> Initial A=10, B=20, C=30, D=40; checkpoint at entry 5 lists {T1, T2}; T1 commits at entry 6.</p>
+    <table>
+      <thead><tr><th class="c">Crash after</th><th>UNDO list</th><th>REDO list</th><th class="c">A</th><th class="c">B</th><th class="c">C</th><th class="c">D</th></tr></thead>
+      <tbody>
+        <tr><td class="c">5</td><td>T1, T2</td><td>none</td><td class="c">10</td><td class="c">20</td><td class="c">30</td><td class="c">40</td></tr>
+        <tr><td class="c">8</td><td>T2, T3</td><td>T1</td><td class="c">11</td><td class="c">20</td><td class="c">30</td><td class="c">40</td></tr>
+        <tr><td class="c">9</td><td>T2, T3</td><td>T1</td><td class="c">11</td><td class="c">20</td><td class="c">30</td><td class="c">40</td></tr>
+        <tr><td class="c">10</td><td>T2</td><td>T1, T3</td><td class="c">11</td><td class="c">20</td><td class="c">33</td><td class="c">40</td></tr>
+        <tr><td class="c">11</td><td>T2</td><td>T1, T3</td><td class="c">11</td><td class="c">20</td><td class="c">33</td><td class="c">40</td></tr>
+        <tr><td class="c">12</td><td>none</td><td>T1, T2, T3</td><td class="c">12</td><td class="c">22</td><td class="c">33</td><td class="c">44</td></tr>
+      </tbody>
+    </table>
+</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-15</span><span class="q-title">Immediate modification with an aborted transaction (tricky)</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <pre>Initial: A=10, B=20, C=30, D=40.
+1 &lt;T1,start&gt;  2 &lt;T1,A,10,20&gt;  3 &lt;T2,start&gt;  4 &lt;T2,B,20,25&gt;  5 &lt;T1,commit&gt;
+6 &lt;T3,start&gt;  7 &lt;T3,A,20,30&gt;  8 &lt;T2,C,30,35&gt; 9 &lt;T2,abort&gt;
+10 &lt;T3,D,40,45&gt; 11 &lt;T4,start&gt; 12 &lt;T4,C,30,40&gt; 13 &lt;T4,commit&gt;  CRASH</pre>
+    <div class="answer">
+      <b>UNDO list: T3. REDO list: T1, T4. Ignored: T2</b> (aborted and already rolled back).<br>
+      Undo backward: entry 10 → D = 40; entry 7 → A = 20. A is restored to 20, the old value in entry 7, which is T1's
+      committed value (not 10).<br>
+      Redo: T1 sets A = 20 (entry 2); T4 sets C = 40 (entry 12).
+      <b>Final: A = 20, B = 20, C = 40, D = 40.</b> T2's B and C changes were already reverted when T2 aborted.
+    <p class="small"><b>Related (U3-D-26, why UNDO must run backward).</b> Initial A=1, B=5, C=9, D=0. UNDO: T1, T3; REDO: T2. Undo backward — entry 9 → D = 0, entry 6 → A = 2, entry 3 → B = 5, entry 2 → A = 1; redo entry 5 → C = 8 → <b>A = 1, B = 5, C = 8, D = 0</b>. Run forward instead and entry 6 would set A = 2 after entry 2 set A = 1, leaving A = 2 — wrong, since A was originally 1. The earliest old value must win.</p>
+
+    </div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-16</span><span class="q-title">Crash during recovery — UNDO/REDO is repeatable</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p>Uses the log of U3-D-08 up to entry 10 (T3 still active). Disk at crash #1: A = 120, B = 200, C = 330, D = 440.</p>
+    <div class="answer">
+      <b>Recovery 1.</b> Undo T3, redo T1 and T2 → <b>A = 110, B = 220, C = 330, D = 400</b>.
+      Compared with the disk at crash #1, <b>3 items differ</b> (A, B, D).<br>
+      <b>Crash again after the UNDO phase, before any REDO.</b> Disk at that moment: A = 110, B = 200, C = 330, D = 400.
+      Recovery from scratch undoes T3 (A = 110, D = 400) and redoes T1 (A = 110, C = 330) and T2 (B = 220).
+      <b>Final: A = 110, B = 220, C = 330, D = 400</b> — the same.<br>
+      <b>Part 3, with disk A = 110, B = 220, C = 330, D = 400.</b> The same recovery rewrites the same values →
+      <b>A = 110, B = 220, C = 330, D = 400</b>. Undo and redo write absolute values, so repeating them does not change
+      the result.
+    </div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-17</span><span class="q-title">Shadow paging — page tables and the root pointer</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p>Shadow table: P1→L3, P2→L7, P3→L1, P4→L5, P5→L2. Free: L4, L6, L8, L9 (lowest free location is always used).
+    Transaction T modifies P2, then P5, then P2 again.</p>
+    <pre>Current table after T's writes:  P1→L3  P2→L4  P3→L1  P4→L5  P5→L6
+  (P2 copied to L4 on its first modification; P5 copied to L6; the second P2 write is in place at L4)</pre>
+    <table>
+      <thead><tr><th>Case</th><th>Page table the database uses</th><th>Free list</th></tr></thead>
+      <tbody>
+        <tr><td><b>(a)</b> crash before commit</td><td>the <b>shadow</b> table: P1→L3, P2→L7, P3→L1, P4→L5, P5→L2</td><td>L4, L6, L8, L9</td></tr>
+        <tr><td><b>(b)</b> T commits</td><td>the <b>current</b> table: P1→L3, P2→L4, P3→L1, P4→L5, P5→L6</td><td>L2, L7, L8, L9</td></tr>
+      </tbody>
+    </table>
+    <div class="answer">Crash before commit needs <b>no undo</b> — the current table is simply discarded and L4 and L6
+    are reclaimed. On commit the old locations L2 and L7 are freed.
+    <p class="small"><b>Related (U3-D-24):</b> across three transactions with P1…P5 at L1…L5 and free L6–L9 — T1 modifies P3, P1, P3 and commits; T2 modifies P5, P2, P4 and crashes; T3 modifies P2 and commits.</p>
+    <table>
+      <thead><tr><th>After</th><th>Committed page table</th><th>Free list</th><th class="c">Copies made</th></tr></thead>
+      <tbody>
+        <tr><td>T1 commit</td><td class="mono">P1→L7, P2→L2, P3→L6, P4→L4, P5→L5</td><td class="mono">L1, L3, L8, L9</td><td class="c">2 (P3→L6, P1→L7; the 2nd P3 write is in place)</td></tr>
+        <tr><td>T2 crash (restart)</td><td class="mono">same as above</td><td class="mono">L1, L3, L8, L9</td><td class="c">3 (P5→L1, P2→L3, P4→L8), all reclaimed</td></tr>
+        <tr><td>T3 commit</td><td class="mono">P1→L7, P2→L1, P3→L6, P4→L4, P5→L5</td><td class="mono">L2, L3, L8, L9</td><td class="c">1 (P2→L1; L2 freed)</td></tr>
+      </tbody>
+    </table>
+
+    <p class="small"><b>Related (U3-D-18) — three transactions, commit frees the replaced locations.</b> P1=100@L1, P2=200@L2, P3=300@L3, P4=400@L4; free L5–L8. T1: P1=150, P3=350, commit. T2: P2=250, P4=450, P1=160, crash. T3 (after restart): P4=500, commit.</p>
+    <table>
+      <thead><tr><th>After</th><th>Committed page table</th><th>Free list</th><th class="c">P1</th><th class="c">P2</th><th class="c">P3</th><th class="c">P4</th></tr></thead>
+      <tbody>
+        <tr><td>T1 commit</td><td class="mono">P1→L5, P2→L2, P3→L6, P4→L4</td><td class="mono">L1, L3, L7, L8</td><td class="c">150</td><td class="c">200</td><td class="c">350</td><td class="c">400</td></tr>
+        <tr><td>T2 crash (restart)</td><td class="mono">same as above</td><td class="mono">L1, L3, L7, L8</td><td class="c">150</td><td class="c">200</td><td class="c">350</td><td class="c">400</td></tr>
+        <tr><td>T3 commit</td><td class="mono">P1→L5, P2→L2, P3→L6, P4→L1</td><td class="mono">L3, L4, L7, L8</td><td class="c">150</td><td class="c">200</td><td class="c">350</td><td class="c">500</td></tr>
+      </tbody>
+    </table>
+</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-19</span><span class="q-title">Recoverability and recovery together (cascading dependency)</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <pre>Initial: A=10, B=20, C=30, D=40.  Immediate modification.
+T2 computes B = A + 10 from T1's uncommitted A; T3 computes C = B + 10 from T2's uncommitted B.
+1 &lt;T1,start&gt;  2 &lt;T1,A,10,15&gt;  3 &lt;T2,start&gt;  4 &lt;T2,B,20,25&gt;  5 &lt;T3,start&gt;
+6 &lt;T3,C,30,35&gt; 7 &lt;T4,start&gt; 8 &lt;T4,D,40,41&gt; 9 &lt;T4,commit&gt; 10 &lt;T2,commit&gt;  CRASH (T1, T3 never commit)</pre>
+    <div class="answer">
+      <b>Recovery.</b> Undo T1 (A = 10, entry 2) and T3 (C = 30, entry 6); redo T2 (B = 25) and T4 (D = 41).
+      <b>Final: A = 10, B = 25, C = 30, D = 41.</b><br>
+      <b>Inconsistency.</b> B = 25 was computed from A = 15, but A has reverted to 10. T2's committed effect derives
+      from rolled-back data.<br>
+      <b>Classification.</b> Not recoverable (T2 read from T1 and committed while T1 never committed); not cascadeless
+      (T2 read T1's uncommitted A, and T3 read T2's uncommitted B); not strict.<br>
+      <b>Corrected state.</b> If T2 had been forced to wait for T1, T2 could not commit, so T2 and T3 would also be
+      undone → <b>A = 10, B = 20, C = 30, D = 41</b> (only independent T4 survives).
+    </div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-20</span><span class="q-title">Bank transfers with a checkpoint (real-world)</span><span class="q-tags"><span class="pill lvl">L5</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <pre>Initial: ACC1=1000, ACC2=2000, ACC3=3000, ACC4=4000.
+T1: ACC1 −200, ACC2 +200, commit.   T2: ACC2 −500, ACC3 +500, commit.   T3: ACC3 −300, ACC4 +300.
+T4: ACC1 ×1.10 (10% interest).
+1 &lt;T1,start&gt; 2 &lt;T1,ACC1,1000,800&gt; 3 &lt;T1,ACC2,2000,2200&gt; 4 &lt;T1,commit&gt;
+5 &lt;T2,start&gt; 6 &lt;T2,ACC2,2200,1700&gt; 7 &lt;checkpoint {T2}&gt; 8 &lt;T2,ACC3,3000,3500&gt; 9 &lt;T2,commit&gt;
+10 &lt;T3,start&gt; 11 &lt;T3,ACC3,3500,3200&gt; 12 &lt;T3,ACC4,4000,4300&gt;
+13 &lt;T4,start&gt; 14 &lt;T4,ACC1,800,880&gt; 15 &lt;T4,commit&gt;</pre>
+    <table>
+      <thead><tr><th>Crash after</th><th>UNDO</th><th>REDO</th><th class="c">ACC1</th><th class="c">ACC2</th><th class="c">ACC3</th><th class="c">ACC4</th><th class="c">Total</th></tr></thead>
+      <tbody>
+        <tr><td>entry 15</td><td>T3</td><td>T2, T4</td><td class="c">880</td><td class="c">1700</td><td class="c">3500</td><td class="c">4000</td><td class="c"><b>10,080</b></td></tr>
+        <tr><td>entry 12</td><td>T3</td><td>T2</td><td class="c">800</td><td class="c">1700</td><td class="c">3500</td><td class="c">4000</td><td class="c"><b>10,000</b></td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Why the totals differ.</b> T1, T2 and T3 each move money without changing the sum. T4 adds
+    80 (10&nbsp;% of 800) in part 1, so part 1 totals 10,000 + 80 = <b>10,080</b>. T1 committed before the checkpoint
+    and is ignored in both parts.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-21</span><span class="q-title">Deferred modification — crash during commit (inventory)</span><span class="q-tags"><span class="pill lvl">L5</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <pre>Initial stock: P1=50, P2=200, P3=75, P4=30.  Deferred modification.
+1 &lt;T1,start&gt;  2 &lt;T1,P1,45&gt;  3 &lt;T1,P2,180&gt;  4 &lt;T1,commit&gt;
+5 &lt;T2,start&gt;  6 &lt;T2,P2,170&gt;  7 &lt;T2,P3,60&gt;  8 &lt;T2,commit&gt;
+9 &lt;T3,start&gt; 10 &lt;T3,P4,24&gt;   CRASH while T2 was applying its writes
+Disk at crash: P1=50, P2=170, P3=75, P4=30.</pre>
+    <table>
+      <thead><tr><th class="c">Step</th><th>Write</th><th class="c">P1</th><th class="c">P2</th><th class="c">P3</th></tr></thead>
+      <tbody>
+        <tr><td class="c">start</td><td>disk state</td><td class="c">50</td><td class="c">170</td><td class="c">75</td></tr>
+        <tr><td class="c">1</td><td>T1: P1 = 45</td><td class="c">45</td><td class="c">170</td><td class="c">75</td></tr>
+        <tr><td class="c">2</td><td>T1: P2 = 180</td><td class="c">45</td><td class="c">180</td><td class="c">75</td></tr>
+        <tr><td class="c">3</td><td>T2: P2 = 170</td><td class="c">45</td><td class="c">170</td><td class="c">75</td></tr>
+        <tr><td class="c">4</td><td>T2: P3 = 60</td><td class="c">45</td><td class="c">170</td><td class="c">60</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>REDO list: T1, T2. Ignored: T3.</b> Final: <b>P1 = 45, P2 = 170, P3 = 60, P4 = 30</b>.
+    Redone in the opposite order (T2 then T1), P2 would end at <b>180</b>, which is wrong — REDO must follow log order.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-22</span><span class="q-title">Combined: schedule analysis, strict 2PL and recovery</span><span class="q-tags"><span class="pill lvl">L5</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <pre>Initial: A=500, B=300, C=200.  T1 moves 100 from A to B; T2 moves 50 from B to C.
+Schedule: r1(A) w1(A) r2(C) w2(C) r2(B) w2(B) c2 r1(B) w1(B) c1
+Immediate log: 1 &lt;T1,start&gt;  2 &lt;T2,start&gt;  3 &lt;T1,A,500,400&gt;  4 &lt;T2,C,200,250&gt;
+               5 &lt;T2,B,300,250&gt;  6 &lt;T2,commit&gt;  7 &lt;checkpoint {T1}&gt;  8 &lt;T1,B,250,350&gt;</pre>
+    <table>
+      <thead><tr><th>Crash point</th><th>UNDO</th><th>REDO</th><th class="c">A</th><th class="c">B</th><th class="c">C</th><th class="c">Sum</th></tr></thead>
+      <tbody>
+        <tr><td>after entry 8 (before c1)</td><td>T1</td><td>none</td><td class="c">500</td><td class="c">250</td><td class="c">250</td><td class="c">1000</td></tr>
+        <tr><td>after &lt;T1,commit&gt; (entry 9)</td><td>none</td><td>T1</td><td class="c">400</td><td class="c">350</td><td class="c">250</td><td class="c">1000</td></tr>
+      </tbody>
+    </table>
+    <div class="answer">
+      <b>Graph:</b> the only shared item is B (w2(B) before r1(B) and w1(B)) → T2→T1; acyclic, serial order
+      <b>T2, T1</b>. <b>Classification:</b> recoverable, cascadeless and strict — T1's read of B comes after c2.<br>
+      T2 committed before the checkpoint so it is ignored. Undo backward: B = 250 (entry 8), A = 500 (entry 3).
+      Redo sets A = 400 and B = 350. <b>Both sums are 1000</b>, equal to the initial 500 + 300 + 200.
+    </div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-23</span><span class="q-title">Month-end fee batch with per-account SAVEPOINTs (real-world)</span><span class="q-tags"><span class="pill lvl">L5</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p>A fee of 900 is charged to each of 101, 102, 103, 104. Each posting is two statements: insert into
+    <code>u3_fee_log</code>, then debit the account. A failed posting must be fully undone without losing the others.</p>
+    <pre>START TRANSACTION;
+SAVEPOINT sp_101;
+INSERT INTO u3_fee_log VALUES (101, 900);
+UPDATE u3_account SET balance = balance - 900 WHERE acc_no = 101;   <span class="c-ok">-- ok</span>
+
+SAVEPOINT sp_102;
+INSERT INTO u3_fee_log VALUES (102, 900);
+UPDATE u3_account SET balance = balance - 900 WHERE acc_no = 102;   <span class="c-ok">-- ok</span>
+
+SAVEPOINT sp_103;
+INSERT INTO u3_fee_log VALUES (103, 900);
+UPDATE u3_account SET balance = balance - 900 WHERE acc_no = 103;   <span class="c-ok">-- ok</span>
+
+SAVEPOINT sp_104;
+INSERT INTO u3_fee_log VALUES (104, 900);                           <span class="c-ok">-- ok</span>
+UPDATE u3_account SET balance = balance - 900 WHERE acc_no = 104;
+<span class="c-err">-- ERROR 3819: Check constraint 'chk_bal' is violated.</span>
+ROLLBACK TO SAVEPOINT sp_104;      <span class="c-com">-- removes the log row for 104</span>
+COMMIT;</pre>
+    <div class="answer"><b>Expected.</b> Fee-log rows for <b>101, 102 and 103 only</b>; balances
+    <b>9100, 4100, 19100, 800</b>. The failed posting for 104 is the only thing undone. The <code>ROLLBACK TO</code>
+    is what removes 104's log row, because the failed UPDATE rolled back only its own statement.<br>
+    <em>Oracle:</em> one anonymous block looping over the accounts with an inner
+    <code>BEGIN … EXCEPTION WHEN OTHERS THEN ROLLBACK TO sp_posting; END;</code>. Re-issuing
+    <code>SAVEPOINT sp_posting</code> moves the earlier savepoint of that name, which is why the loop works.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-D-25</span><span class="q-title">Shadow paging — crash during the commit sequence</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p>Committed table: P1→L1 (10), P2→L2 (20), P3→L3 (30). T sets P1 = 11 (copied to L4) and P2 = 21 (copied to L5).
+    Commit has three steps: (1) write the current page table to disk, (2) update the root pointer to the new table,
+    (3) free the old locations L1 and L2.</p>
+    <table>
+      <thead><tr><th>Crash point</th><th>State after restart</th><th>Unreachable locations</th></tr></thead>
+      <tbody>
+        <tr><td>(i) before step 1</td><td>P1→L1=10, P2→L2=20, P3→L3=30</td><td>L4, L5 (reclaimed)</td></tr>
+        <tr><td>(ii) after step 1, before step 2</td><td>same as (i) — the root still points to the old table</td><td>L4, L5 (the new table on disk is unused)</td></tr>
+        <tr><td>(iii) after step 2, before step 3</td><td>P1→L4=11, P2→L5=21, P3→L3=30</td><td>L1, L2 (garbage not on the free list)</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Recovery rule:</b> the database uses whichever page table the root pointer designates.
+    Atomicity follows from step 2 being a single pointer write — the transaction is either entirely visible or
+    entirely absent. In case (iii) a restart scan (or garbage collection) finds the locations not referenced by the
+    active table and frees them.</div>
+  </div>
+</div>
+

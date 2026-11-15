@@ -1,0 +1,223 @@
+<!-- ===================== PART 2 ===================== -->
+<h1 class="part" id="part2">Part 2 — Important Formulas &amp; Rules</h1>
+<p class="part-lead">Every formula the unit uses, with its variables and a short worked example. Statistics used in the manual problems: EMP = 50,000 tuples / 1,250 blocks / blocking factor 40; DEPT = 10 tuples / 1 block; WORKS = 150,000 tuples / 3,000 blocks; PROJ = 200 tuples.</p>
+
+<h2 id="p2-cost"><span class="num">1.</span>Cost &amp; Cardinality Models</h2>
+
+<h3>1.1 Block count of a relation</h3>
+<div class="formula">b<sub>R</sub> = ⌈ n<sub>R</sub> / bf<sub>R</sub> ⌉ &nbsp;&nbsp;where&nbsp;&nbsp; bf<sub>R</sub> = ⌊ B / t<sub>R</sub> ⌋</div>
+<p class="kv"><b>n<sub>R</sub></b> = number of tuples · <b>B</b> = block size (bytes) · <b>t<sub>R</sub></b> = tuple size (bytes) ·
+<b>bf<sub>R</sub></b> = blocking factor (tuples per block) · <b>b<sub>R</sub></b> = number of blocks.</p>
+<div class="answer"><b>Worked example (U3-A-04):</b> B = 4,000 B. EMP tuples are 100 B → bf = ⌊4000/100⌋ = 40, so
+b<sub>EMP</sub> = 50,000 / 40 = <b>1,250 blocks</b>. A projected temp relation of 40 B/tuple → bf = 100 →
+50,000/100 = <b>500 blocks</b> (a saving of 750 blocks, 60&nbsp;%).</div>
+
+<h3>1.2 Selectivity and result cardinality</h3>
+<div class="formula">|result| = n<sub>R</sub> × s<sub>1</sub> × s<sub>2</sub> × … &nbsp;&nbsp;(independent conditions)</div>
+<p class="kv"><b>s<sub>i</sub></b> = selectivity (fraction of tuples satisfying condition i).</p>
+<div class="answer"><b>Worked example (U3-A-03):</b> σ<sub>salary&gt;50000</sub>(EMP) with s = 0.6 →
+50,000 × 0.6 = <b>30,000 tuples</b>. σ<sub>city='Pune'</sub>(DEPT) → 2 of 10 → <b>2 tuples</b>.
+The join then keeps 30,000 × (2/10) = <b>6,000 tuples</b>.</div>
+
+<h3>1.3 Join cardinality estimate</h3>
+<div class="formula">|R ⋈ S| ≈ ( n<sub>R</sub> × n<sub>S</sub> ) / max( V(R,a), V(S,a) )</div>
+<p class="kv"><b>V(R,a)</b> = number of distinct values of the join attribute <em>a</em> in R.</p>
+<div class="answer"><b>Worked example (U3-A-05):</b> EMP(50,000) ⋈ WORKS(150,000) on emp_id; each EMP row matches
+3 WORKS rows → 50,000 × 3 = <b>150,000 tuples</b>.</div>
+
+<hr class="soft">
+
+<h2 id="p2-join"><span class="num">2.</span>Join Algorithms &amp; Index Access Costs</h2>
+
+<h3>2.1 Block Nested-Loop Join (BNL)</h3>
+<div class="formula">Cost<sub>BNL</sub> = b<sub>outer</sub> + ⌈ b<sub>outer</sub> / (M − 2) ⌉ × b<sub>inner</sub></div>
+<p class="kv"><b>M</b> = number of buffer pages available · <b>b<sub>outer</sub></b>, <b>b<sub>inner</sub></b> = block counts of the
+outer and inner relations. The inner relation is re-scanned once per outer <em>chunk</em> of (M−2) blocks, so the
+<b>smaller</b> relation should normally be the outer one.</p>
+<div class="answer"><b>Worked example (U3-A-07):</b> M = 52, so M − 2 = 50.<br>
+(i) EMP outer: 1,250 + ⌈1250/50⌉ × 3,000 = 1,250 + 25 × 3,000 = <b>76,250</b>.<br>
+(ii) WORKS outer: 3,000 + ⌈3000/50⌉ × 1,250 = 3,000 + 60 × 1,250 = <b>78,000</b>.<br>
+Winner: (i), EMP as the outer relation.</div>
+
+<h3>2.2 Index Nested-Loop Join</h3>
+<div class="formula">Cost<sub>INL</sub> = b<sub>outer</sub> + n<sub>outer</sub> × ( h + k )</div>
+<p class="kv"><b>h</b> = height of the index on the inner join attribute · <b>k</b> = block I/Os per matching inner tuple
+(≈ 1 if unclustered, ≈ 1/bf if clustered).</p>
+<div class="answer"><b>Worked example (U3-A-07):</b> index height 3, each EMP tuple matches 3 WORKS tuples at 1 I/O each:
+1,250 + 50,000 × (3 + 3) = <b>301,250</b>. It loses to BNL because every outer tuple triggers an index probe on
+unclustered matches.</div>
+
+<h3>2.3 Access-path costs for a single-table selection</h3>
+<table>
+  <thead><tr><th>Path</th><th>Cost (blocks)</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><b>Linear scan</b></td><td class="mono">b<sub>R</sub></td><td>Always available.</td></tr>
+    <tr><td><b>Clustered index</b></td><td class="mono">h + ⌈r / bf⌉</td><td>r = number of matching records.</td></tr>
+    <tr><td><b>Secondary index</b></td><td class="mono">h + r</td><td>≈ one I/O per matching record (unclustered).</td></tr>
+  </tbody>
+</table>
+<p class="kv"><b>h</b> = index height · <b>r</b> = matching records · <b>bf</b> = blocking factor.</p>
+<div class="answer"><b>Worked example (U3-A-08):</b> r = 5,000, h = 3, bf = 40, b<sub>EMP</sub> = 1,250.<br>
+Linear scan = <b>1,250</b>. Secondary = 3 + 5,000 = <b>5,003</b>. Clustered = 3 + ⌈5000/40⌉ = 3 + 125 = <b>128</b>.<br>
+Ranking: clustered &lt; scan &lt; secondary. <b>Break-even</b> where the scan beats the secondary index:
+3 + r = 1,250 → <b>r = 1,247</b> records. Above that the scan is cheaper.</div>
+
+<h3>2.4 Pushdown savings</h3>
+<div class="formula">Reduction factor = (sum of intermediate sizes, unoptimized) / (sum of intermediate sizes, optimized)</div>
+<div class="answer"><b>Worked example (U3-A-03):</b> initial tree forms EMP × DEPT = 500,000 tuples before selecting.
+Optimized tree's intermediates total 30,000 + 2 + 6,000 = 36,002. Comparing the product with the two selected
+inputs: 500,000 / 30,002 ≈ <b>16.7×</b> reduction.</div>
+
+<hr class="soft">
+
+<h2 id="p2-sched"><span class="num">3.</span>Schedule Classes &amp; Serializability</h2>
+
+<h3>3.1 Conflict and conflict equivalence</h3>
+<div class="box def">
+  <span class="box-title">Rule</span>
+  <p>Two operations conflict iff they are from <b>different transactions</b>, access the <b>same item</b>, and at least one
+  is a <b>write</b>. Two schedules are <b>conflict equivalent</b> if they order every conflicting pair the same way.</p>
+</div>
+<div class="answer"><b>Worked example (U3-C-01):</b> S1 = r1(A) w2(A) r2(B) w1(B) r3(A) w3(B). Conflicting pairs:
+(r1(A),w2(A)), (w2(A),r3(A)), (r2(B),w1(B)), (r2(B),w3(B)), (w1(B),w3(B)) → <b>5 pairs</b>. The pair (r1(A),r3(A))
+is read/read, so it does not conflict.</div>
+
+<h3>3.2 Conflict serializability test</h3>
+<ol class="tight">
+  <li>Draw one node per transaction.</li>
+  <li>For every conflicting pair, add an edge from the earlier transaction to the later one.</li>
+  <li><b>Acyclic ⇒ conflict serializable</b>; a topological order is an equivalent serial order.</li>
+  <li><b>Cycle ⇒ not conflict serializable.</b></li>
+</ol>
+
+<h3>3.3 View serializability requirements</h3>
+<ul class="tight">
+  <li><b>Initial read:</b> if T<sub>i</sub> reads the initial value of X in S, it does so in the serial order too.</li>
+  <li><b>Read-from:</b> if T<sub>j</sub> reads a value written by T<sub>i</sub> in S, it does so in the serial order too.</li>
+  <li><b>Final write:</b> the transaction performing the last write of X in S does so in the serial order too.</li>
+</ul>
+<div class="answer"><b>Worked example (U3-C-05, S5a):</b> r1(A) w2(A) w1(A) w3(A) has the cycle T1→T2→T1, so it is
+<b>not</b> conflict serializable. View test: r1 reads the initial value (so T1 first) and T3 makes the final write (so
+T3 last). Only the order <b>T1, T2, T3</b> satisfies both — it is <b>view serializable</b>.</div>
+
+<h3>3.4 Recoverability, cascadelessness, strictness</h3>
+<table>
+  <thead><tr><th>Class</th><th>Formal condition</th><th>Test on a schedule</th></tr></thead>
+  <tbody>
+    <tr><td><b>Recoverable</b></td><td>If T<sub>j</sub> reads from T<sub>i</sub>, then c<sub>i</sub> &lt; c<sub>j</sub>.</td><td>Find every read-from pair; check commit order.</td></tr>
+    <tr><td><b>Cascadeless</b></td><td>Every read is of a committed value: no read of an uncommitted write.</td><td>Every r<sub>j</sub>(X) must follow the writer's commit.</td></tr>
+    <tr><td><b>Strict</b></td><td>No read <em>or write</em> of X until the last writer of X has committed/aborted.</td><td>Also forbids overwriting an uncommitted value.</td></tr>
+  </tbody>
+</table>
+<div class="answer"><b>Worked example (U3-C-07):</b> R2 = w1(A) r2(A) c2 c1 → <b>not</b> recoverable (T2 reads from T1 but
+c2 precedes c1). R4 = w1(A) w2(A) c1 c2 → recoverable and cascadeless (no reads) but <b>not</b> strict (T2 overwrites
+T1's uncommitted A).</div>
+
+<hr class="soft">
+
+<h2 id="p2-lock"><span class="num">4.</span>Locking, 2PL &amp; Deadlock</h2>
+
+<h3>4.1 Lock compatibility</h3>
+<table>
+  <thead><tr><th>Held \ Requested</th><th class="c">S</th><th class="c">X</th></tr></thead>
+  <tbody>
+    <tr><td><b>S</b></td><td class="c">Granted</td><td class="c">Blocked</td></tr>
+    <tr><td><b>X</b></td><td class="c">Blocked</td><td class="c">Blocked</td></tr>
+  </tbody>
+</table>
+
+<h3>4.2 Two-phase locking rules</h3>
+<ul class="tight">
+  <li><b>Growing phase:</b> a transaction may only acquire locks (and may upgrade S → X).</li>
+  <li><b>Shrinking phase:</b> a transaction may only release locks.</li>
+  <li><b>Lock point:</b> the instant the transaction holds its final lock, i.e. the boundary between the two phases.</li>
+  <li><b>Strict 2PL:</b> all exclusive locks are held until commit/abort (shared locks may be released earlier).</li>
+</ul>
+
+<h3>4.3 Deadlock detection and prevention</h3>
+<div class="formula">Wait-for edge: T<sub>i</sub> → T<sub>j</sub> when T<sub>i</sub> waits for a lock held by T<sub>j</sub>. Deadlock ⇔ cycle.</div>
+<table>
+  <thead><tr><th>Scheme</th><th>Older requester (TS smaller)</th><th>Younger requester</th></tr></thead>
+  <tbody>
+    <tr><td><b>Wait-Die</b></td><td>Waits</td><td>Aborts (“dies”)</td></tr>
+    <tr><td><b>Wound-Wait</b></td><td>Wounds — aborts the younger holder</td><td>Waits</td></tr>
+  </tbody>
+</table>
+<p class="small">Smaller timestamp = older. Both schemes are deadlock-free because the wait-for graph always points
+from younger to older.</p>
+<div class="answer"><b>Worked example (U3-C-14, e1):</b> TS(T1) = 5, TS(T2) = 10, T2 requests a lock held by T1
+(younger → older). Wait-Die: <b>T2 aborts</b>. Wound-Wait: <b>T2 waits</b>.</div>
+
+<hr class="soft">
+
+<h2 id="p2-to"><span class="num">5.</span>Timestamp Ordering &amp; Optimistic Validation</h2>
+
+<h3>5.1 Basic timestamp ordering (TO)</h3>
+<table>
+  <thead><tr><th>Operation</th><th>Abort if</th><th>Otherwise</th></tr></thead>
+  <tbody>
+    <tr><td><b>Read(X) by T</b></td><td>TS(T) &lt; W-TS(X)</td><td>Execute; R-TS(X) = max(R-TS(X), TS(T))</td></tr>
+    <tr><td><b>Write(X) by T</b></td><td>TS(T) &lt; R-TS(X) or TS(T) &lt; W-TS(X)</td><td>Execute; W-TS(X) = TS(T)</td></tr>
+  </tbody>
+</table>
+<p class="kv"><b>R-TS(X)</b> = largest timestamp of any transaction that read X · <b>W-TS(X)</b> = largest timestamp of any
+transaction that wrote X. On abort the operations are discarded and <b>timestamps are not restored</b>.</p>
+
+<h3>5.2 Thomas Write Rule</h3>
+<div class="formula">Write(X) by T: if TS(T) &lt; R-TS(X) → abort. If R-TS(X) ≤ TS(T) &lt; W-TS(X) → ignore the write. Else execute.</div>
+<div class="answer"><b>Worked example (U3-C-16, S16a):</b> w2(X) sets W(X) = 2. Then w1(X) with TS = 1: basic TO sees
+1 &lt; W = 2 → <b>T1 aborts</b>. Thomas Write Rule: R = 0 ≤ 1 &lt; W = 2 → the write is <b>ignored</b>, T1 continues and
+both commit. The rule only changes the stale blind-write case.</div>
+
+<h3>5.3 Optimistic validation rule</h3>
+<div class="box def">
+  <span class="box-title">Validation test for T<sub>j</sub> against an earlier-validated T<sub>i</sub></span>
+  <p>T<sub>j</sub> passes if <b>finish(T<sub>i</sub>) &lt; start(T<sub>j</sub>)</b>, <em>or</em> both
+  <b>start(T<sub>j</sub>) &lt; finish(T<sub>i</sub>) &lt; validation(T<sub>j</sub>)</b> and
+  <b>WriteSet(T<sub>i</sub>) ∩ ReadSet(T<sub>j</sub>) = ∅</b>. Any failure ⇒ T<sub>j</sub> aborts.</p>
+</div>
+<div class="answer"><b>Worked example (U3-C-17, T3 vs T2):</b> finish(T2) = 9, start(T3) = 8, validation(T3) = 10, so
+8 &lt; 9 &lt; 10 (overlap). WS(T2) = {C} ∩ RS(T3) = {A,C} = {C} ≠ ∅ → <b>T3 aborts</b>.</div>
+
+<hr class="soft">
+
+<h2 id="p2-rec"><span class="num">6.</span>Recovery Rules</h2>
+
+<h3>6.1 Log record formats</h3>
+<table>
+  <thead><tr><th>Record</th><th>Used by</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">&lt;T,X,new&gt;</td><td>Deferred modification (new value only)</td></tr>
+    <tr><td class="mono">&lt;T,X,old,new&gt;</td><td>Immediate modification (both values)</td></tr>
+    <tr><td class="mono">&lt;T,X,old&gt;</td><td>UNDO-only logging</td></tr>
+  </tbody>
+</table>
+
+<h3>6.2 Recovery procedure by strategy</h3>
+<table>
+  <thead><tr><th>Strategy</th><th>Passes</th><th>Direction</th><th>Which transactions</th></tr></thead>
+  <tbody>
+    <tr><td><b>Deferred</b></td><td>REDO only</td><td>Forward, log order</td><td>Committed</td></tr>
+    <tr><td><b>Immediate</b></td><td>UNDO then REDO</td><td>UNDO backward, REDO forward</td><td>UNDO: no commit/abort · REDO: committed</td></tr>
+    <tr><td><b>UNDO-only</b></td><td>UNDO only</td><td>Backward</td><td>No commit record</td></tr>
+  </tbody>
+</table>
+
+<h3>6.3 Checkpoint rules</h3>
+<ul class="tight">
+  <li>A transaction that committed <b>before</b> the checkpoint → <b>IGNORE</b> (already on disk).</li>
+  <li>A transaction in the checkpoint list that commits after it → <b>REDO from its first write</b>.</li>
+  <li>A transaction with an <b>abort</b> record → <b>IGNORE</b> (already rolled back).</li>
+  <li>Scan start = the <b>earliest start record</b> of any transaction active at the checkpoint.</li>
+</ul>
+
+<h3>6.4 Shadow paging rules</h3>
+<ul class="tight">
+  <li>A modified page is copied to the <b>lowest-numbered free</b> location; the current page table is updated.</li>
+  <li>A page modified twice is copied <b>once</b> (the second write is in place).</li>
+  <li><b>Commit</b> = make the current table the shadow table, then free the replaced locations.</li>
+  <li><b>Crash before commit</b> = use the shadow table and reclaim all locations allocated by the failed transaction.</li>
+</ul>
+<div class="answer"><b>Worked example (U3-D-17):</b> shadow table P1→L3, P2→L7, P3→L1, P4→L5, P5→L2; free L4, L6, L8, L9.
+T modifies P2 then P5 then P2. Current table after T's writes: P1→L3, P2→L4, P3→L1, P4→L5, P5→L6. Crash before
+commit → database uses the shadow table (P2→L7, P5→L2); L4 and L6 are reclaimed, free list = L4, L6, L8, L9.</div>

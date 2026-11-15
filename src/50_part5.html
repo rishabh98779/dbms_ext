@@ -1,0 +1,189 @@
+<!-- ===================== PART 5 ===================== -->
+<h1 class="part" id="part5">Part 5 — Last-Minute Revision</h1>
+<p class="part-lead">Everything you need in the final hour: the definitions, the formulas, the differences, the rules and the traps, plus a priority list of question IDs.</p>
+
+<h2><span class="num">1.</span>Ten Definitions You Must Be Able to State</h2>
+<table>
+  <thead><tr><th>Term</th><th>One-line definition</th></tr></thead>
+  <tbody>
+    <tr><td><b>Query tree</b></td><td>A diagram of a relational-algebra expression: leaves are relations, internal nodes are operators, the root is the result.</td></tr>
+    <tr><td><b>Selectivity</b></td><td>The fraction of tuples satisfying a predicate; result size = input tuples × selectivity.</td></tr>
+    <tr><td><b>Transaction</b></td><td>A logical unit of work that is either entirely committed or entirely rolled back.</td></tr>
+    <tr><td><b>ACID</b></td><td>Atomicity, Consistency, Isolation, Durability.</td></tr>
+    <tr><td><b>Conflict</b></td><td>Two operations on the same item from different transactions where at least one is a write.</td></tr>
+    <tr><td><b>Conflict serializable</b></td><td>The precedence graph is acyclic.</td></tr>
+    <tr><td><b>Recoverable</b></td><td>If T<sub>j</sub> reads from T<sub>i</sub>, then T<sub>i</sub> commits before T<sub>j</sub>.</td></tr>
+    <tr><td><b>Strict 2PL</b></td><td>All exclusive locks are held until commit/abort — gives serializability <em>and</em> strictness.</td></tr>
+    <tr><td><b>Write-ahead logging</b></td><td>The log record for a change reaches stable storage before the changed page does.</td></tr>
+    <tr><td><b>Checkpoint</b></td><td>A point where all log records and modified pages are forced to disk, bounding how far recovery must scan.</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">2.</span>Formulas on One Screen</h2>
+<table>
+  <thead><tr><th>Formula</th><th>Use</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">bf = ⌊B / t⌋ &nbsp;·&nbsp; b = ⌈n / bf⌉</td><td>Blocking factor and block count of a relation</td></tr>
+    <tr><td class="mono">|result| = n × s₁ × s₂ × …</td><td>Result cardinality with independent predicates</td></tr>
+    <tr><td class="mono">Cost_BNL = b_o + ⌈b_o/(M−2)⌉ × b_i</td><td>Block nested-loop join (put the smaller relation outer)</td></tr>
+    <tr><td class="mono">Cost_INL = b_o + n_o × (h + k)</td><td>Index nested-loop join</td></tr>
+    <tr><td class="mono">Scan = b &nbsp;·&nbsp; Clustered = h + ⌈r/bf⌉ &nbsp;·&nbsp; Secondary = h + r</td><td>Access-path costs for a single-table selection</td></tr>
+    <tr><td class="mono">Break-even: h + r = b → r = b − h</td><td>Where the scan beats a secondary index</td></tr>
+    <tr><td class="mono">Read: abort if TS(T) &lt; W-TS(X)</td><td>Basic timestamp ordering — read rule</td></tr>
+    <tr><td class="mono">Write: abort if TS(T) &lt; R-TS(X) or TS(T) &lt; W-TS(X)</td><td>Basic timestamp ordering — write rule</td></tr>
+    <tr><td class="mono">Thomas: ignore if R-TS(X) ≤ TS(T) &lt; W-TS(X)</td><td>Thomas Write Rule — stale blind write</td></tr>
+    <tr><td class="mono">Pass if finish(Tᵢ) &lt; start(Tⱼ) <br> or start(Tⱼ) &lt; finish(Tᵢ) &lt; validation(Tⱼ) ∧ WS(Tᵢ) ∩ RS(Tⱼ) = ∅</td><td>Optimistic validation of T<sub>j</sub> against T<sub>i</sub></td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">3.</span>Differences That Are Easy to Mix Up</h2>
+<table>
+  <thead><tr><th>Pair</th><th>Distinction</th></tr></thead>
+  <tbody>
+    <tr><td><b>2PL vs Strict 2PL</b></td><td>2PL releases locks in a shrinking phase; strict 2PL holds every exclusive lock until commit.</td></tr>
+    <tr><td><b>Conflict vs view serializability</b></td><td>Conflict uses the acyclic precedence graph; view uses initial reads, read-from and final writes. View serializable but not conflict serializable happens only with blind writes.</td></tr>
+    <tr><td><b>Recoverable vs cascadeless</b></td><td>Recoverable just orders the commits; cascadeless forbids reading <em>any</em> uncommitted value, so no cascade can start.</td></tr>
+    <tr><td><b>Wait-Die vs Wound-Wait</b></td><td>Wait-Die: older waits, younger dies. Wound-Wait: older wounds the younger holder, younger waits.</td></tr>
+    <tr><td><b>Basic TO vs Thomas Write Rule</b></td><td>Thomas ignores a stale blind write instead of aborting; the read rule is unchanged.</td></tr>
+    <tr><td><b>UNDO vs REDO</b></td><td>UNDO (backward) restores old values of uncommitted transactions; REDO (forward) re-applies new values of committed ones.</td></tr>
+    <tr><td><b>Deferred vs immediate modification</b></td><td>Deferred writes only after commit (REDO only); immediate writes any time (UNDO then REDO).</td></tr>
+    
+    <tr><td><b>Clustered vs secondary index</b></td><td>Clustered: matching records are physically together (h + r/bf). Secondary: about one I/O per record (h + r).</td></tr>
+    
+    <tr><td><b>MySQL vs Oracle on deadlock</b></td><td>MySQL rolls back the whole victim transaction; Oracle rolls back only the failing statement.</td></tr>
+    <tr><td><b>MySQL vs Oracle on readers</b></td><td>MySQL default REPEATABLE READ gives a snapshot; Oracle default READ COMMITTED gives statement-level reads. Oracle has no READ UNCOMMITTED.</td></tr>
+    
+    <tr><td><b>FOR UPDATE NOWAIT vs SKIP LOCKED</b></td><td>NOWAIT fails immediately; SKIP LOCKED silently ignores locked rows and returns the rest.</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">4.</span>Rules &amp; Conditions Checklist</h2>
+<div class="two-col">
+<h4>Optimization</h4>
+<ul class="tight">
+  <li>Push single-relation selections; a mixed condition goes just above the join.</li>
+  <li>Turn products + equality selection into joins.</li>
+  <li>Join the most selective pair first.</li>
+  <li>Push projections to keep only needed attributes.</li>
+  <li>Function-wrapped columns are not sargable.</li>
+</ul>
+<h4>Concurrency</h4>
+<ul class="tight">
+  <li>Read/read never conflicts.</li>
+  <li>Acyclic precedence graph ⇔ conflict serializable.</li>
+  <li>Strict ⇒ cascadeless ⇒ recoverable.</li>
+  <li>S/S compatible; S/X and X/X block.</li>
+  <li>Lock point = end of the growing phase.</li>
+  <li>Deadlock ⇔ cycle in the wait-for graph.</li>
+</ul>
+<h4>Recovery</h4>
+<ul class="tight">
+  <li>UNDO backward, REDO forward.</li>
+  <li>Commit before checkpoint → ignore.</li>
+  <li>Abort record → ignore.</li>
+  <li>Scan from the earliest start of a checkpoint-active transaction.</li>
+  <li>UNDO/REDO write absolute values (idempotent).</li>
+  <li>Shadow paging: lowest free location; commit frees the replaced ones.</li>
+</ul>
+<h4>Transactions</h4>
+<ul class="tight">
+  <li>DDL commits implicitly.</li>
+  <li>A failed statement does not end the transaction.</li>
+  <li>AUTO_INCREMENT / identity values are not rolled back.</li>
+  <li>Re-issuing SAVEPOINT with the same name moves it.</li>
+</ul>
+</div>
+
+<h2><span class="num">5.</span>Frequently Confusing Points</h2>
+<div class="box warn">
+  <span class="box-title">Traps the source flags explicitly</span>
+  <ol class="tight">
+    <li><b>Index nested loop is not automatically fastest.</b> With unclustered matches it cost 301,250 against BNL's
+    76,250 in U3-A-07.</li>
+    <li><b>A clustering column order matters.</b> <code>idx_ds(dept_id, salary)</code> beat
+    <code>idx_sd(salary, dept_id)</code> by about 10× in U3-A-09.</li>
+    <li><b>Oracle needs <code>IS NOT NULL</code></b> before an index can serve an ordered scan on a nullable column
+    (U3-A-15).</li>
+    <li><b>REPEATABLE READ still shows a phantom on a locking read.</b> The snapshot count stays 5000 while
+    <code>FOR SHARE</code> returns 5001 (U3-C-20).</li>
+    <li><b>MySQL and Oracle roll back different amounts on deadlock.</b> Whole transaction vs single statement
+    (U3-C-19).</li>
+    <li><b>UNDO run forward gives the wrong value.</b> A ends at 2 instead of 1 in U3-D-26.</li>
+    <li><b>REDO run out of order gives the wrong value.</b> P2 ends at 180 instead of 170 in U3-D-21.</li>
+    <li><b>A committed transaction can still be undone indirectly.</b> U3-D-19 shows T2's committed B derived from
+    rolled-back A.</li>
+    <li><b>A gap in the identity sequence is not an atomicity failure</b> (U3-B-12).</li>
+  </ol>
+</div>
+
+<h2><span class="num">6.</span>High-Priority Question IDs</h2>
+<p class="small">If you have limited time, work through these in order. Each one introduces a distinct concept or a reusable pattern (highest-value subset of the 86-question bank).</p>
+<ul class="prio two-col">
+<li><span class="mono pid">U3-B-01</span> <span class="pt">COMMIT, multi-row transfer (start here — fully executable)</span> <span class="plv">L1</span></li><li><span class="mono pid">U3-B-02</span> <span class="pt">ROLLBACK and atomicity</span> <span class="plv">L1</span></li><li><span class="mono pid">U3-A-01</span> <span class="pt">SQL → RA → query tree; selection cascade</span> <span class="plv">L1</span></li><li><span class="mono pid">U3-A-02</span> <span class="pt">EXPLAIN before/after an index</span> <span class="plv">L1</span></li><li><span class="mono pid">U3-C-01</span> <span class="pt">Finding conflicting pairs</span> <span class="plv">L1</span></li><li><span class="mono pid">U3-C-02</span> <span class="pt">Precedence graph → conflict serializability</span> <span class="plv">L1</span></li><li><span class="mono pid">U3-D-05</span> <span class="pt">Deferred modification, REDO only</span> <span class="plv">L1</span></li><li><span class="mono pid">U3-D-06</span> <span class="pt">Immediate modification, UNDO then REDO</span> <span class="plv">L1</span></li><li><span class="mono pid">U3-B-03</span> <span class="pt">SAVEPOINT and partial rollback</span> <span class="plv">L2</span></li><li><span class="mono pid">U3-B-04</span> <span class="pt">ACID via a constraint failure</span> <span class="plv">L2</span></li><li><span class="mono pid">U3-A-03</span> <span class="pt">Selection pushdown and intermediate sizes</span> <span class="plv">L2</span></li><li><span class="mono pid">U3-A-04</span> <span class="pt">Projection pushdown, block estimates</span> <span class="plv">L2</span></li><li><span class="mono pid">U3-C-07</span> <span class="pt">The recoverable / cascadeless / strict table</span> <span class="plv">L2</span></li><li><span class="mono pid">U3-C-12</span> <span class="pt">2PL vs strict 2PL and lock points</span> <span class="plv">L2</span></li><li><span class="mono pid">U3-D-07</span> <span class="pt">Deferred modification at multiple crash points</span> <span class="plv">L2</span></li><li><span class="mono pid">U3-D-08</span> <span class="pt">Immediate modification at multiple crash points</span> <span class="plv">L2</span></li><li><span class="mono pid">U3-A-05</span> <span class="pt">Join ordering across three plans</span> <span class="plv">L3</span></li><li><span class="mono pid">U3-A-07</span> <span class="pt">BNL vs index nested loop cost</span> <span class="plv">L3</span></li><li><span class="mono pid">U3-B-06</span> <span class="pt">Lost update and FOR UPDATE</span> <span class="plv">L3</span></li><li><span class="mono pid">U3-C-05</span> <span class="pt">View serializability with blind writes</span> <span class="plv">L3</span></li><li><span class="mono pid">U3-C-08</span> <span class="pt">Rewriting a schedule to be cascadeless and strict</span> <span class="plv">L3</span></li><li><span class="mono pid">U3-C-11</span> <span class="pt">Strict 2PL simulation with a deadlock</span> <span class="plv">L3</span></li><li><span class="mono pid">U3-C-14</span> <span class="pt">Wait-Die vs Wound-Wait</span> <span class="plv">L3</span></li><li><span class="mono pid">U3-D-10</span> <span class="pt">Checkpoint recovery, deferred</span> <span class="plv">L3</span></li><li><span class="mono pid">U3-D-11</span> <span class="pt">Checkpoint recovery, immediate</span> <span class="plv">L3</span></li><li><span class="mono pid">U3-D-14</span> <span class="pt">REDO / UNDO / IGNORE classification</span> <span class="plv">L3</span></li><li><span class="mono pid">U3-A-08</span> <span class="pt">Access-path costs and break-even</span> <span class="plv">L4</span></li><li><span class="mono pid">U3-A-09</span> <span class="pt">Composite index column order</span> <span class="plv">L4</span></li><li><span class="mono pid">U3-A-16</span> <span class="pt">Mixed conditions and pushdown limits</span> <span class="plv">L4</span></li><li><span class="mono pid">U3-C-13</span> <span class="pt">Deadlock victim selection by cost</span> <span class="plv">L4</span></li><li><span class="mono pid">U3-C-15</span> <span class="pt">Timestamp ordering, step by step</span> <span class="plv">L4</span></li><li><span class="mono pid">U3-C-16</span> <span class="pt">Thomas Write Rule vs basic TO</span> <span class="plv">L4</span></li><li><span class="mono pid">U3-C-17</span> <span class="pt">Optimistic validation, pairwise tests</span> <span class="plv">L4</span></li><li><span class="mono pid">U3-C-19</span> <span class="pt">Real deadlock: MySQL vs Oracle</span> <span class="plv">L4</span></li><li><span class="mono pid">U3-D-15</span> <span class="pt">Immediate recovery with an aborted transaction</span> <span class="plv">L4</span></li><li><span class="mono pid">U3-D-19</span> <span class="pt">Cascading dependency: recoverability + recovery</span> <span class="plv">L4</span></li><li><span class="mono pid">U3-A-10</span> <span class="pt">Sargability rewrite of a slow report</span> <span class="plv">L5</span></li><li><span class="mono pid">U3-B-08</span> <span class="pt">Concurrent booking: SKIP LOCKED vs NOWAIT</span> <span class="plv">L5</span></li><li><span class="mono pid">U3-C-21</span> <span class="pt">Serializability + recoverability together</span> <span class="plv">L5</span></li><li><span class="mono pid">U3-D-20</span> <span class="pt">Bank transfers with a checkpoint</span> <span class="plv">L5</span></li><li><span class="mono pid">U3-D-22</span> <span class="pt">Schedule + strict 2PL + recovery combined</span> <span class="plv">L5</span></li><li><span class="mono pid">U3-D-23</span> <span class="pt">Per-account SAVEPOINT batch</span> <span class="plv">L5</span></li>
+</ul>
+
+<div class="box tip">
+  <span class="box-title">Suggested practice route</span>
+  <p><b>Executable first:</b> Section B (all of it), then the EXPLAIN questions in Section A, then D-01 to D-04 and
+  D-23. <b>Then the manual core:</b> C-01 → C-02 → C-24 (graphs) → C-07 → C-08 (schedule classes) →
+  D-05 → D-06 → D-07/D-08/D-27 (recovery) → the Level 4–5 questions.</p>
+</div>
+
+<hr class="soft">
+
+<h2 id="notes"><span class="num">7.</span>Accuracy Notes &amp; Curation Summary</h2>
+
+<div class="box note">
+  <span class="box-title">Honesty note on execution (from the source audit)</span>
+  <p>The source states plainly that no MySQL or Oracle instance was available when it was written: every solution is
+  hand-checked, and every “expected” plan, lock or log output is a description rather than a captured result.
+  <b>No SQL in this guide has been executed or tested here either.</b> Run each exercise once; where an EXPLAIN or lock
+  output differs from the description, trust your database.</p>
+</div>
+
+<h4>What was retained</h4>
+<ul class="tight">
+  <li>All four sections (A, B, C, D) with at least one worked example per distinct concept.</li>
+  <li>All formulas and cost models: block counts, selectivity, BNL and INL costs, access-path costs and break-even,
+  TO/Thomas/OCC rules, recovery and checkpoint rules, shadow-paging rules.</li>
+  <li>The corrected U3-C-19 solution (MySQL rolls back the whole victim transaction; Oracle only the failing
+  statement) — the source explicitly flags its earlier wording as wrong.</li>
+  <li>Platform-specific caveats: Oracle <code>IS NOT NULL</code> for ordered index scans, Oracle's
+  <code>FOR UPDATE</code> + row-limiting restriction, MySQL gap locking, deadlock rollback scope, autocommit.</li>
+  <li>Every numbered table, recovery trace and shadow-paging snapshot for the selected questions.</li>
+</ul>
+
+<h4>What was consolidated or excluded</h4>
+<ul class="tight">
+  <li><b>Setup scripts</b> (<code>u3_dept</code>, <code>u3_emp</code>, <code>u3_account</code>, …) are not reproduced;
+  the guide references the tables by name and states the assumed starting values instead.</li>
+  <li><b>Batch status reports, progress notes and conversational transitions</b> from the four batches are removed.</li>
+  <li><b>Duplicate questions</b> testing the same concept are collapsed into one worked example with a “Related”
+  pointer to the parallel question (for example C-02 ↔ C-24, C-05 ↔ C-06 ↔ C-25, C-15 ↔ C-28, C-17 ↔ C-29,
+  D-07/D-08/D-27).</li>
+  <li><b>The 40-question coverage matrix</b> is summarised rather than reproduced row by row; its per-topic counts
+  (A = 16, B = 12, C = 31, D = 27, 86 total, 30 executable) are preserved in the source.</li>
+  <li><b>Repeated expected outputs</b> for the same pattern (for example the reset balances) are stated once.</li>
+  <li>Trivially similar variations that introduce no new concept were omitted, but no topic was dropped.</li>
+</ul>
+
+<h4>Source inconsistencies and open items requiring attention</h4>
+<table>
+  <thead><tr><th>Item</th><th>Status / action</th></tr></thead>
+  <tbody>
+    <tr><td><b>U3-C-19 final-balance wording</b></td><td>The source admits the original paragraph was muddled and supplies a correction, which is used here. Note the Oracle branch depends on whether the erroring session issues ROLLBACK (102 = 4900) or COMMIT (102 = 4800).</td></tr>
+    <tr><td><b>Timestamp-ordering on-ramp</b></td><td>The source notes C-15, C-16, C-22 and C-28 are all Level 4 with no Level 1–2 warm-up; it suggests hand-simplifying C-15 to two transactions first.</td></tr>
+    <tr><td><b>Shadow paging</b></td><td>Four questions, all manual — inherent, since neither platform exposes it.</td></tr>
+    <tr><td><b>Two-phase locking</b></td><td>Manual simulations only (plus real-lock observation in C-10 and C-30); neither engine exposes a plain 2PL scheduler.</td></tr>
+    <tr><td><b>FreeSQL worksheet</b></td><td>The source could not verify support for <code>DBMS_XPLAN</code>, <code>DBMS_STATS</code>, <code>SET AUTOCOMMIT</code> or two simultaneous sessions. Use a local Oracle instance if a two-session exercise will not run there.</td></tr>
+    <tr><td><b>Parts 1 and 2</b></td><td>The source never saw them, so the ID format, platform labels and the <code>u3_</code> table prefix are its own conventions, not necessarily the university's. Match them before reuse.</td></tr>
+    <tr><td><b>Version dependencies</b></td><td>MySQL needs 8.0.16+ for enforced CHECK, 8.0.18+ for EXPLAIN ANALYZE; Oracle needs 12c+ for identity columns and FETCH FIRST.</td></tr>
+  </tbody>
+</table>
+
+<div class="box tip">
+  <span class="box-title">Final check before an assessment</span>
+  <p>Reset the tables, then re-run one executable question from each section. If any expected output differs from what
+  you see, record the question ID and the actual output — that is the fastest way to find whether the exercise or your
+  environment needs adjusting.</p>
+</div>

@@ -1,0 +1,403 @@
+<h2 id="p3-c"><span class="num">C.</span>Concurrency Control</h2>
+<p class="small">Notation: <code>r1(A)</code> T1 reads A · <code>w1(A)</code> T1 writes A · <code>c1</code> T1 commits · <code>a1</code> T1 aborts. Schedules read left to right. Neither MySQL nor Oracle lets you configure timestamp ordering, optimistic validation or a precedence-graph checker, so those questions are <span class="pill man">Manual</span>; I have invented no commands for them.</p>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-02</span><span class="q-title">Precedence graphs and conflict serializability</span><span class="q-tags"><span class="pill lvl">L1</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Schedules.</b> S2a: r1(A) w1(A) r2(A) w2(A) r1(B) w1(B) r2(B) w2(B). S2b: r1(A) r2(A) w2(A) w1(A).</p>
+    <div class="answer"><b>S2a.</b> On A, w1(A) precedes r2(A) and w2(A) → T1→T2; same on B → T1→T2. The graph is acyclic,
+    so <b>S2a is conflict serializable</b>, equivalent to serial order <b>T1, T2</b>.<br>
+    <b>S2b.</b> r1(A) before w2(A) → T1→T2; r2(A) before w1(A) → T2→T1. The cycle makes S2b
+    <b>not conflict serializable</b>.</div>
+
+    <p class="small"><b>Related (U3-C-03, conflict equivalence).</b> For S3 = w1(A) r2(A) w1(B) r3(B) w2(C) w3(D) the edges are T1→T2 (A) and T1→T3 (B), with T2 and T3 unordered — the serial orders are <b>T1,T2,T3</b> and <b>T1,T3,T2</b>. For Sx = r1(A) w1(A) r2(A) r1(B) w2(B), the schedule Sy = r1(A) w1(A) r1(B) r2(A) w2(B) keeps both conflicting pairs in the same order, so it is <b>conflict equivalent</b>; Sz = r1(A) r2(A) w2(B) w1(A) r1(B) reverses both pairs (r2(A) before w1(A), w2(B) before r1(B)) and is therefore <b>not</b> equivalent — it matches serial T2,T1 instead.</p>
+    <p class="small"><b>Related (U3-C-24):</b> for S24 = w1(A) r2(A) w3(B) r4(B) w2(C) r4(C) r1(D) w3(D) the acyclic graph
+    gives serial orders <b>T1,T2,T3,T4</b> and <b>T1,T3,T2,T4</b>. Appending w2(D) adds T3→T2 and leaves the unique
+    order T1,T3,T2,T4.</p>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-04</span><span class="q-title">Cycle detection and transaction removal (tricky)</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Schedule S4.</b> r1(X) w2(X) r3(Y) w1(Y) r4(Z) w3(Z) w4(X). Draw the graph, list every simple cycle, and
+    test whether deleting each single transaction makes the rest serializable.</p>
+    <pre>Edges : X → T1→T2, T1→T4, T2→T4
+        Y → T3→T1
+        Z → T4→T3
+Cycles: T1→T4→T3→T1   and   T1→T2→T4→T3→T1</pre>
+    <table>
+      <thead><tr><th>Delete</th><th>Remaining edges</th><th class="c">Serializable?</th></tr></thead>
+      <tbody>
+        <tr><td>T1</td><td>T2→T4, T4→T3</td><td class="c">Yes</td></tr>
+        <tr><td>T2</td><td>T1→T4, T4→T3, T3→T1 — cycle survives</td><td class="c"><b>No</b></td></tr>
+        <tr><td>T3</td><td>T1→T2, T1→T4, T2→T4</td><td class="c">Yes</td></tr>
+        <tr><td>T4</td><td>T1→T2, T3→T1</td><td class="c">Yes</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-05</span><span class="q-title">View serializability — blind writes</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Schedules.</b> S5a: r1(A) w2(A) w1(A) w3(A). S5b: w1(A) w2(A) w2(B) w1(B) w3(A) w3(B).</p>
+    <p><b>S5a.</b> Conflict test: r1(A) before w2(A) → T1→T2; w2(A) before w1(A) → T2→T1. Cycle → <b>not conflict
+    serializable</b>. View test: r1 reads the initial value (T1 first) and T3 makes the final write (T3 last). Only
+    <b>T1, T2, T3</b> satisfies both → <b>view serializable</b>.</p>
+    <p><b>S5b.</b> Cycle on A → not conflict serializable. There are no reads, and the final writes of A and B are both
+    by T3, so any order with T3 last matches → <b>view serializable as T1,T2,T3 or T2,T1,T3</b>.</p>
+    <div class="box tip"><span class="box-title">Pattern to remember</span>
+    <p>A schedule that is view serializable but not conflict serializable always owes it to a <b>blind write</b> whose
+    value is overwritten before any read. <b>U3-C-06</b> gives the negative cases: S6 (r1(A) r2(A) w1(A) w2(A)) and
+    S7 (r1(A) w2(A) r3(A) w1(A)) are <b>neither</b> conflict nor view serializable, because the required order
+    constraints contradict each other. <b>U3-C-25</b> applies the same reasoning to S25a (not view serializable) and
+    S25b (view serializable only as T1,T2,T3).</p>
+    <p class="small"><b>Related (U3-C-01, conflicting operations):</b> for S1 = r1(A) w2(A) r2(B) w1(B) r3(A) w3(B) the conflicting pairs are (r1(A),w2(A)), (w2(A),r3(A)), (r2(B),w1(B)), (r2(B),w3(B)) and (w1(B),w3(B)) — <b>5 pairs</b>. The pair (r1(A),r3(A)) is read/read, so it does not conflict.</p>
+</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-07</span><span class="q-title">Recoverable, cascadeless and strict — the 7-schedule table</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <table>
+      <thead><tr><th>Schedule</th><th class="c">Recoverable</th><th class="c">Cascadeless</th><th class="c">Strict</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">R1: w1(A) r2(A) c1 c2</td><td class="c">Yes</td><td class="c">No</td><td class="c">No</td><td>T2 reads from T1 before c1, but c1 precedes c2</td></tr>
+        <tr><td class="mono">R2: w1(A) r2(A) c2 c1</td><td class="c"><b>No</b></td><td class="c">No</td><td class="c">No</td><td>T2 reads from T1 and commits before c1</td></tr>
+        <tr><td class="mono">R3: w1(A) c1 r2(A) w2(A) c2</td><td class="c">Yes</td><td class="c">Yes</td><td class="c">Yes</td><td>Reads/writes occur only after c1</td></tr>
+        <tr><td class="mono">R4: w1(A) w2(A) c1 c2</td><td class="c">Yes</td><td class="c">Yes</td><td class="c"><b>No</b></td><td>No reads, but T2 overwrites uncommitted w1(A)</td></tr>
+        <tr><td class="mono">R5: w1(A) r2(A) w2(B) a1 c2</td><td class="c"><b>No</b></td><td class="c">No</td><td class="c">No</td><td>T2 read from T1, T1 aborted, T2 committed</td></tr>
+        <tr><td class="mono">R6: w1(A) r2(A) a1 a2</td><td class="c">Yes</td><td class="c">No</td><td class="c">No</td><td>T2 read from T1 before a1 (cascade abort)</td></tr>
+        <tr><td class="mono">R7: w1(A) w2(A) a1 c2</td><td class="c">Yes</td><td class="c">Yes</td><td class="c"><b>No</b></td><td>T2 overwrote uncommitted w1(A); a1's before-image restore would destroy T2's write</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Read the pattern, not the rows.</b> Not recoverable ⇔ a read-from pair commits out of order.
+    Not cascadeless ⇔ some read is of an uncommitted value. Not strict ⇔ someone touches an item whose last writer is
+    still uncommitted (the “overwrite” rows R4, R7 have no reads at all).</div>
+    <p class="small"><b>Related (U3-C-09, cascading rollback).</b> For S9 = w1(A) r2(A) w2(B) r3(B) w3(C) r4(C) w5(D) r6(D) a1 with nothing yet committed: the abort set is T1 (explicit), T2 (read A from T1), T3 (read B from T2) and T4 (read C from T3); T5 and T6 survive (T5 read nothing dirty, T6 read D from T5). If c2 had occurred just before a1, T2 would have committed after reading T1's dirty A while T1 never commits — <b>not recoverable</b>, violating pair (T2 reads from T1 and commits while T1 aborts).</p>
+
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-10</span><span class="q-title">Shared and exclusive locks — real lock compatibility</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Task (MySQL).</b> A holds <code>FOR SHARE</code> on 101; B takes <code>FOR SHARE</code> (granted at once —
+    S/S compatible). Inspect <code>performance_schema.data_locks</code>, then have B attempt an UPDATE and re-inspect.</p>
+    <pre>SELECT ENGINE_TRANSACTION_ID, OBJECT_NAME, INDEX_NAME, LOCK_TYPE, LOCK_MODE, LOCK_STATUS, LOCK_DATA
+FROM performance_schema.data_locks;</pre>
+    <div class="answer"><b>Observed.</b> Both transactions hold table-level IS locks plus record-level
+    <code>S,REC_NOT_GAP</code> locks with <code>LOCK_STATUS = GRANTED</code>. After B's update, an extra
+    <code>X,REC_NOT_GAP</code> row for B shows <code>LOCK_STATUS = WAITING</code>. A plain SELECT is a consistent
+    non-locking read and returns immediately. If A had issued an UPDATE instead of committing, the two X-lock
+    upgrades deadlock (error 1213).</div>
+    <div class="box note"><span class="box-title">Oracle</span>
+    <p>Oracle row reads take no locks and there is no shared row lock, so the unit uses table locks:
+    <code>LOCK TABLE u3_account IN SHARE MODE;</code> is granted to both sessions, but an UPDATE then waits for A.
+    A lock view (<code>v$lock</code>) needs privileges. If both sessions hold SHARE locks and both try to update, one
+    gets <code>ORA-00060</code>.</p>
+    <p class="small"><b>Related (U3-C-30, lock waits and timeouts).</b> With A holding a lock on 101: MySQL <code>SET SESSION innodb_lock_wait_timeout = 3;</code> then an UPDATE gives <b>ERROR 1205</b> after ≈ 3 s; <code>FOR UPDATE NOWAIT</code> gives <b>ERROR 3572</b>; <code>FOR UPDATE SKIP LOCKED</code> returns an empty set. Oracle gives <b>ORA-00054</b> (NOWAIT), <b>ORA-30006</b> (<code>WAIT 3</code>) and no rows (SKIP LOCKED). A plain Oracle UPDATE has no default timeout and waits indefinitely. By default (<code>innodb_rollback_on_timeout OFF</code>) a MySQL timeout rolls back only the statement, so B's transaction stays open.</p>
+</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-11</span><span class="q-title">Strict 2PL simulation with a deadlock</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Transactions.</b> T1 = r(A) w(B) w(A) commit. T2 = r(A) w(B) commit (started after T1). Arrival order:
+    r1(A), r2(A), w1(B), w2(B), w1(A). Strict 2PL; upgrades allowed; on deadlock abort the younger and restart it.</p>
+    <table>
+      <thead><tr><th class="c">#</th><th>Operation</th><th>Lock request</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td class="c">1</td><td>r1(A)</td><td>S(A) by T1</td><td>Granted</td></tr>
+        <tr><td class="c">2</td><td>r2(A)</td><td>S(A) by T2</td><td>Granted (S/S)</td></tr>
+        <tr><td class="c">3</td><td>w1(B)</td><td>X(B) by T1</td><td>Granted</td></tr>
+        <tr><td class="c">4</td><td>w2(B)</td><td>X(B) by T2</td><td><b>Blocked</b> (T1 holds X(B))</td></tr>
+        <tr><td class="c">5</td><td>w1(A)</td><td>upgrade S→X(A) by T1</td><td><b>Blocked</b> (T2 holds S(A))</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Wait-for graph:</b> T2→T1 and T1→T2 → <b>deadlock</b>. <b>Victim:</b> T2 (younger); it aborts
+    and releases S(A). T1's upgrade is granted, w1(A) runs, T1 commits. T2 restarts: r2(A), w2(B), c2.<br>
+    <b>Executed schedule:</b> r1(A) r2(A) w1(B) w1(A) c1 r2(A) w2(B) c2 — equivalent to serial T1, T2.</div>
+
+    <p class="small"><b>Related (U3-C-26, strict 2PL with lock points).</b> T1 = r(A) w(A) r(B) c, T2 = w(B) r(A) c, arrival r1(A), w2(B), r2(A), w1(A), c2, r1(B), c1. T1's upgrade to X(A) is blocked by T2's S(A); c2 releases it, so the executed schedule is r1(A) w2(B) r2(A) c2 w1(A) r1(B) c1 — equivalent to serial T2, T1. Lock points: T2 = S(A), T1 = S(B). The schedule is <b>recoverable, cascadeless and strict</b>, since T1 touches B only after c2.</p>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-12</span><span class="q-title">2PL vs strict 2PL and lock points</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Notation.</b> S(X) shared lock · X(X) exclusive lock · U(X) unlock · c commit.</p>
+    <table>
+      <thead><tr><th>Transaction</th><th class="c">2PL?</th><th class="c">Strict 2PL?</th><th>Lock point</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">Ta: S(A) r(A) X(B) w(B) U(A) c U(B)</td><td class="c">Yes</td><td class="c">Yes (X(B) released after c)</td><td class="mono">X(B)</td></tr>
+        <tr><td class="mono">Tb: S(A) r(A) U(A) X(B) w(B) c U(B)</td><td class="c"><b>No</b> (X(B) after U(A))</td><td class="c">No</td><td>–</td></tr>
+        <tr><td class="mono">Tc: X(A) w(A) U(A) c</td><td class="c">Yes</td><td class="c"><b>No</b> (X(A) released before c)</td><td class="mono">X(A)</td></tr>
+        <tr><td class="mono">Td: S(A) r(A) X(A) w(A) c U(A)</td><td class="c">Yes</td><td class="c">Yes</td><td class="mono">X(A) (upgrade)</td></tr>
+        <tr><td class="mono">Te: S(A) r(A) X(B) w(B) U(B) S(C) r(C) c U(A) U(C)</td><td class="c"><b>No</b> (S(C) after U(B))</td><td class="c">No</td><td>–</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Rule to apply.</b> 2PL fails the moment a lock is <em>acquired</em> after any lock is released.
+    Strict 2PL additionally fails if an <b>exclusive</b> lock is released before commit — releasing a shared lock early
+    is legal in both.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-13</span><span class="q-title">Deadlock detection, wait-for graph and victim selection</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <table>
+      <thead><tr><th class="c">Txn</th><th>Holds</th><th>Waiting for</th><th class="c">Rollback cost</th></tr></thead>
+      <tbody>
+        <tr><td class="c">T1</td><td>X(A)</td><td>X(B)</td><td class="c">10</td></tr>
+        <tr><td class="c">T2</td><td>X(B)</td><td>X(C)</td><td class="c">4</td></tr>
+        <tr><td class="c">T3</td><td>X(C)</td><td>X(A)</td><td class="c">7</td></tr>
+        <tr><td class="c">T4</td><td>X(D)</td><td>X(A)</td><td class="c">12</td></tr>
+        <tr><td class="c">T5</td><td>S(E)</td><td>X(D)</td><td class="c">3</td></tr>
+      </tbody>
+    </table>
+    <p class="small">Queue on A is T3 first, then T4; locks are granted in queue order.</p>
+    <div class="answer"><b>Edges:</b> T1→T2, T2→T3, T3→T1, T4→T1, T5→T4. <b>One cycle:</b> T1→T2→T3→T1.
+    <b>Deadlocked:</b> T1, T2, T3. <b>Only blocked:</b> T4 and T5 — they are not on the cycle.<br>
+    <b>Victim:</b> abort <b>T2 (cost 4)</b>, the cheapest on the cycle. Aborting T4 or T5 would leave the deadlock
+    intact.<br>
+    <b>After T2 aborts:</b> X(B) is released and T1's queued request is granted → T1 finishes. T3 is first in A's queue,
+    so T3 gets X(A) and finishes. Then T4 gets A and finishes, and T5 gets X(D).
+    <b>Completion order: T1, T3, T4, T5</b>; T2 restarts afterwards.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-14</span><span class="q-title">Deadlock prevention — Wait-Die vs Wound-Wait</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Setup.</b> TS(T1) = 5, TS(T2) = 10, TS(T3) = 15 — smaller means older. <b>Wait-Die:</b> an older requester
+    waits, a younger requester dies. <b>Wound-Wait:</b> an older requester wounds (aborts) the younger holder, a younger
+    requester waits.</p>
+    <table>
+      <thead><tr><th>Event (requester → holder)</th><th>Wait-Die</th><th>Wound-Wait</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">e1: T2→T1 (younger requests)</td><td>T2 aborts</td><td>T2 waits</td></tr>
+        <tr><td class="mono">e2: T1→T3 (older requests)</td><td>T1 waits</td><td>T3 aborts</td></tr>
+        <tr><td class="mono">e3: T3→T2 (younger requests)</td><td>T3 aborts</td><td>T3 waits</td></tr>
+        <tr><td class="mono">e4: T2→T3 (older requests)</td><td>T2 waits</td><td>T3 aborts</td></tr>
+        <tr><td class="mono">e5: T1→T2 (older requests)</td><td>T1 waits</td><td>T2 aborts</td></tr>
+        <tr><td class="mono">e6: T3→T1 (younger requests)</td><td>T3 aborts</td><td>T3 waits</td></tr>
+      </tbody>
+    </table>
+    <p class="small"><b>Related (U3-C-27):</b> with T3 holding X(A), T2 holding X(B), T1 holding X(C) and requests
+    T1→A, T2→C, T3→B: <b>Wait-Die</b> aborts T2 and commits in the order T3, T1, T2; <b>Wound-Wait</b> aborts T3 and
+    commits T1, T2, T3.</p>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-15</span><span class="q-title">Timestamp ordering (basic TO)</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Setup.</b> TS(T1) = 1, TS(T2) = 2, TS(T3) = 3; items A, B, C start with R-TS = W-TS = 0.
+    Schedule S15: r2(A) w3(A) r1(A) w1(B) r3(B) w2(B) c3. Aborted operations are discarded and timestamps are not
+    restored.</p>
+    <table>
+      <thead><tr><th class="c">Step</th><th>Op</th><th>Check</th><th>Outcome</th><th class="c">A (R,W)</th><th class="c">B (R,W)</th></tr></thead>
+      <tbody>
+        <tr><td class="c">0</td><td>init</td><td>–</td><td>–</td><td class="c">(0,0)</td><td class="c">(0,0)</td></tr>
+        <tr><td class="c">1</td><td class="mono">r2(A)</td><td>2 ≥ W = 0</td><td>OK</td><td class="c">(2,0)</td><td class="c">(0,0)</td></tr>
+        <tr><td class="c">2</td><td class="mono">w3(A)</td><td>3 ≥ R = 2, ≥ W = 0</td><td>OK</td><td class="c">(2,3)</td><td class="c">(0,0)</td></tr>
+        <tr><td class="c">3</td><td class="mono">r1(A)</td><td>1 &lt; W = 3</td><td><b>T1 aborts</b></td><td class="c">(2,3)</td><td class="c">(0,0)</td></tr>
+        <tr><td class="c">4</td><td class="mono">w1(B)</td><td>T1 aborted</td><td>discarded</td><td class="c">(2,3)</td><td class="c">(0,0)</td></tr>
+        <tr><td class="c">5</td><td class="mono">r3(B)</td><td>3 ≥ W = 0</td><td>OK</td><td class="c">(2,3)</td><td class="c">(3,0)</td></tr>
+        <tr><td class="c">6</td><td class="mono">w2(B)</td><td>2 &lt; R = 3</td><td><b>T2 aborts</b></td><td class="c">(2,3)</td><td class="c">(3,0)</td></tr>
+        <tr><td class="c">7</td><td class="mono">c3</td><td>–</td><td>T3 commits</td><td class="c">(2,3)</td><td class="c">(3,0)</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Aborts: T1 and T2.</b> Only T3 commits, and nothing T3 read was written by an aborted
+    transaction, so there is no cascade.<br>
+    <b>Restarts.</b> T1′ (TS 4): r(A) → A (4,3); w(B) → B (3,4). T2′ (TS 5): r(A) → A (5,3); w(B) → B (3,5).
+    <b>Final: A (R=5, W=3), B (R=3, W=5).</b></div>
+    <p class="small"><b>Related (U3-C-28)</b> runs a larger schedule under basic TO and under the Thomas Write Rule:
+    basic TO aborts T1 and T2 with final X(10,30) Y(20,0) Z(30,20); with Thomas, only T1 aborts and T2 continues.</p>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-16</span><span class="q-title">Thomas Write Rule — where it differs from basic TO</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Setup.</b> TS(T1) = 1, TS(T2) = 2; X and Y start at 0.</p>
+    <table>
+      <thead><tr><th>Schedule</th><th>Basic TO</th><th>Thomas Write Rule</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">S16a: w2(X) w1(X) r1(Y) w1(Y)</td><td>w2(X) sets W(X)=2. w1(X): 1 &lt; W=2 → <b>T1 aborts</b>; only T2 commits</td><td>w1(X) is <b>ignored</b> (R=0 ≤ 1 &lt; W=2). r1(Y), w1(Y) run → <b>both commit</b>. X (0,2), Y (1,1)</td></tr>
+        <tr><td class="mono">S16b: r2(X) w1(X) r1(Y) w1(Y)</td><td>r2(X) sets R(X)=2. w1(X): 1 &lt; R=2 → <b>T1 aborts</b></td><td>Same — 1 &lt; R-TS → T1 aborts</td></tr>
+        <tr><td class="mono">S16c: w2(X) r1(X) w1(Y)</td><td>r1(X): 1 &lt; W=2 → <b>T1 aborts</b></td><td>Same — the read rule is unchanged</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Key point.</b> The rule changes only the <b>stale blind write</b> case (S16a), which is not a
+    read conflict. For S16a the result is equivalent to serial T1, T2, because T2's write to X overwrites T1's ignored
+    write.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-17</span><span class="q-title">Optimistic concurrency control — validation</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Rule.</b> T<sub>j</sub> passes against every earlier-validated, non-aborted T<sub>i</sub> if either
+    finish(T<sub>i</sub>) &lt; start(T<sub>j</sub>), or start(T<sub>j</sub>) &lt; finish(T<sub>i</sub>) &lt; validation(T<sub>j</sub>)
+    and WriteSet(T<sub>i</sub>) ∩ ReadSet(T<sub>j</sub>) = ∅.</p>
+    <table>
+      <thead><tr><th class="c">Txn</th><th>Read set</th><th>Write set</th><th class="c">Start</th><th class="c">Validation</th><th class="c">Finish</th></tr></thead>
+      <tbody>
+        <tr><td class="c">T1</td><td>{A,B}</td><td>{A}</td><td class="c">1</td><td class="c">5</td><td class="c">6</td></tr>
+        <tr><td class="c">T2</td><td>{B,C}</td><td>{C}</td><td class="c">2</td><td class="c">7</td><td class="c">9</td></tr>
+        <tr><td class="c">T3</td><td>{A,C}</td><td>{B}</td><td class="c">8</td><td class="c">10</td><td class="c">11</td></tr>
+        <tr><td class="c">T4</td><td>{C}</td><td>{C}</td><td class="c">3</td><td class="c">12</td><td class="c">13</td></tr>
+      </tbody>
+    </table>
+    <table>
+      <thead><tr><th>Test</th><th>Check</th><th class="c">Result</th></tr></thead>
+      <tbody>
+        <tr><td>T1</td><td>First to validate</td><td class="c">Pass</td></tr>
+        <tr><td>T2 vs T1</td><td>finish(T1)=6 not &lt; start(T2)=2; 2&lt;6&lt;7 but WS(T1)={A} ∩ RS(T2)={B,C}=∅</td><td class="c">Pass</td></tr>
+        <tr><td>T3 vs T1</td><td>finish(T1)=6 &lt; start(T3)=8</td><td class="c">OK</td></tr>
+        <tr><td>T3 vs T2</td><td>8&lt;9&lt;10 but WS(T2)={C} ∩ RS(T3)={A,C}={C}</td><td class="c"><b>T3 aborts</b></td></tr>
+        <tr><td>T4 vs T1</td><td>3&lt;6&lt;12, WS(T1)={A} ∩ {C}=∅</td><td class="c">OK</td></tr>
+        <tr><td>T4 vs T2</td><td>3&lt;9&lt;12, WS(T2)={C} ∩ RS(T4)={C}={C}</td><td class="c"><b>T4 aborts</b></td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Variant (T3 reads {A,B}):</b> T3 vs T2 now passes (WS(T2)={C} ∩ {A,B}=∅), so <b>T3 commits</b>.
+    T4 still aborts, because of T2. T3 is not tested against T4 because T3 validates first.</div>
+    <p class="small"><b>Related (U3-C-29):</b> a five-transaction variant. T2 aborts (WS(T1)={B} ∩ RS(T2)={B}) and T5
+    aborts (WS(T3)={D} ∩ RS(T5)={B,D}={D}); T1, T3 and T4 commit. Restarting T2 and T5 at start 14 / validation 15
+    lets both commit, since all earlier finishers are before 14.</p>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-19</span><span class="q-title">Real deadlock — DBMS detection (MySQL vs Oracle)</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Timeline.</b> A debits 101; B debits 102; A debits 102 (blocks); B debits 101 → deadlock.</p>
+    <pre><span class="c-com">-- MySQL error in one session:</span>
+<span class="c-err">ERROR 1213 (40001): Deadlock found when trying to get lock; try restarting transaction</span>
+SHOW ENGINE INNODB STATUS\G          <span class="c-com">-- LATEST DETECTED DEADLOCK section</span>
+
+<span class="c-com">-- Oracle error after about 3 s:</span>
+<span class="c-err">ORA-00060: deadlock detected while waiting for resource</span></pre>
+    <div class="answer"><b>Corrected solution (the source flags an earlier wording error here).</b><br>
+    <b>MySQL (InnoDB):</b> the detector rolls back the <b>entire transaction</b> of the victim; the other session's
+    blocked statement then completes and commits. Both transactions debit 101 and 102 by 100 each, so the committed
+    result is the same whichever session is chosen: <b>101 = 9900, 102 = 4900</b>.<br>
+    <b>Oracle:</b> <code>ORA-00060</code> rolls back only the <b>statement</b> that raised it. That session keeps its
+    earlier update and its lock, so the other session stays blocked until the first ends its transaction. If the
+    erroring session then issues ROLLBACK: <b>101 = 9900, 102 = 4900</b>. If it issues COMMIT instead: 102 was debited
+    twice and 101 once → <b>101 = 9900, 102 = 4800</b>.</div>
+    <p class="small"><b>Prevention.</b> Both sessions update 101 then 102 (ascending account number). The second session
+    simply waits at its first statement and no cycle forms.</p>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-20</span><span class="q-title">Isolation anomalies — dirty read and phantom</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Part 1 — dirty read.</b> A debits 101 by 3,000 without committing; B reads 101.</p>
+    <table>
+      <thead><tr><th>B's isolation level</th><th class="c">B sees</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>MySQL READ UNCOMMITTED</td><td class="c">7000</td><td>Dirty read; after A's ROLLBACK, B reads 10000</td></tr>
+        <tr><td>MySQL READ COMMITTED</td><td class="c">10000</td><td>No dirty read</td></tr>
+        <tr><td>Oracle (any level)</td><td class="c">10000</td><td>Oracle has no READ UNCOMMITTED</td></tr>
+      </tbody>
+    </table>
+    <p><b>Part 2 — phantom.</b> A counts employees with dept_id = 3; B inserts a new row and commits; A counts again.</p>
+    <table>
+      <thead><tr><th>A's mode</th><th class="c">Second count</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>MySQL REPEATABLE READ (default)</td><td class="c">5000</td><td>Snapshot; the phantom appears only on a current read (<code>… FOR SHARE</code> → 5001)</td></tr>
+        <tr><td>Oracle READ COMMITTED</td><td class="c">5001</td><td>Phantom visible</td></tr>
+        <tr><td>Oracle SERIALIZABLE</td><td class="c">5000</td><td>Phantom blocked</td></tr>
+      </tbody>
+    </table>
+    <div class="box warn"><span class="box-title">Part 3 — MySQL gap locking (observe, do not assume)</span>
+    <p>After the extra row is deleted and committed, A runs
+    <code>SELECT … WHERE dept_id=3 FOR UPDATE</code>. InnoDB takes next-key/gap locks on the
+    <code>fk_emp_dept</code> index range, so B's insert blocks until A commits — or until
+    <code>innodb_lock_wait_timeout</code> (default 50 s) fires with <b>error 1205</b>. This relies on InnoDB's
+    REPEATABLE READ gap locking, so confirm it on your own server.</p>
+    <p class="small"><b>Related (U3-C-18, optimistic control with an application-level version column — executable).</b> A and B both read balance/version of 101 (10000, 0). A does <code>UPDATE … SET balance = 9000, version = version + 1 WHERE acc_no = 101 AND version = 0</code> (<code>ROW_COUNT()</code> = 1) and commits. B's same guard on version = 0 returns <b>0 rows</b> — the conflict is detected. B re-reads (9000, 1), recomputes 9500 with <code>AND version = 1</code> (1 row) and commits. <b>Final: 9500, version 2</b> — no update is lost. This is OCC implemented with a version column, not the DBMS's own validation phase.</p>
+</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-21</span><span class="q-title">Serializability and recoverability together (banking)</span><span class="q-tags"><span class="pill lvl">L5</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Scenario.</b> X = 101, Y = 102, Z = 103. T1 moves 101→102, T2 moves 102→103, T3 posts interest to 101 and
+    103. Operations: r1(X) w1(X) r3(X) w3(X) r2(Y) w2(Y) r1(Y) w1(Y) r2(Z) w2(Z) r3(Z) w3(Z); then c1, c2, c3.</p>
+    <div class="answer">
+      <b>Precedence graph.</b> X: T1→T3. Y: T2→T1. Z: T2→T3. Acyclic → <b>conflict serializable</b>, serial order
+      <b>T2, T1, T3</b>.<br>
+      <b>Reads-from:</b> T3 reads X from T1; T1 reads Y from T2; T3 reads Z from T2.<br>
+      <b>Recoverable?</b> No — c1, c2, c3 is wrong: T1 read Y from T2 but commits before T2.<br>
+      <b>Corrected commit order:</b> <b>c2, c1, c3</b> (satisfies c2&lt;c1 from T1 reading T2, c1&lt;c3 from T3 reading
+      T1, and c2&lt;c3 from T3 reading T2).<br>
+      <b>Cascadeless?</b> No — r3(X), r1(Y) and r3(Z) all read uncommitted writes, so an abort of T2 would cascade.
+    </div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-22</span><span class="q-title">Comparing protocols — strict 2PL vs timestamp ordering</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>S22a: r1(A) w2(A) c2 r1(B) c1</b></p>
+    <table>
+      <thead><tr><th>Protocol</th><th>Outcome</th></tr></thead>
+      <tbody>
+        <tr><td>Conflict serializable?</td><td>Yes — T1→T2, serial order T1, T2</td></tr>
+        <tr><td>Strict 2PL</td><td>T1 holds S(A) until c1, so w2(A) blocks. Result: r1(A) r1(B) c1 w2(A) c2 (serial). The original interleaving is not producible</td></tr>
+        <tr><td>Basic TO, TS(T1)=1, TS(T2)=2</td><td>r1(A) → R(A)=1; w2(A): 2 ≥ 1 OK → W(A)=2; r1(B) OK. <b>All commit</b></td></tr>
+        <tr><td>Basic TO, TS(T1)=2, TS(T2)=1</td><td>r1(A) → R(A)=2; w2(A): 1 &lt; R=2 → <b>T2 aborts</b>; T1 commits</td></tr>
+      </tbody>
+    </table>
+    <p><b>S22b: r1(A) r2(A) w2(A) w1(A) c1 c2</b></p>
+    <table>
+      <thead><tr><th>Protocol</th><th>Outcome</th></tr></thead>
+      <tbody>
+        <tr><td>Conflict serializable?</td><td><b>No</b> — cycle T1→T2→T1</td></tr>
+        <tr><td>Strict 2PL</td><td>Both hold S(A); both upgrades block → <b>deadlock</b>. Victim T2 (younger); T1 completes and T2 restarts</td></tr>
+        <tr><td>Basic TO, TS(T1)=1, TS(T2)=2</td><td>R=1, then R=2; w2(A) OK (W=2); w1(A): 1 &lt; R=2 → <b>T1 aborts</b>; T2 commits</td></tr>
+        <tr><td>Basic TO, TS(T1)=2, TS(T2)=1</td><td>R=2; r2(A) OK; w2(A): 1 &lt; R=2 → <b>T2 aborts</b>; w1(A) OK → T1 commits</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Take-away.</b> A conflict-serializable schedule can be rejected by strict 2PL yet accepted by
+    TO (S22a); a non-serializable schedule is rejected by both, but the mechanism differs (deadlock vs abort).
+    <p class="small"><b>Related (U3-C-31, lost update on railway seats).</b> S = 10 available seats; T1 and T2 each do <code>r(S)</code> then <code>w(S) = read − 1</code>, schedule r1(S) r2(S) w1(S) w2(S) c1 c2. Plain result: S = 9, but the correct value is <b>8</b> — a lost update; not conflict serializable. Under <b>strict 2PL</b> (S at read, upgrade at write) both upgrades block → deadlock, victim T2, final <b>S = 8</b>. With an <b>X lock at read</b> (<code>SELECT … FOR UPDATE</code>): executed r1(S) w1(S) c1 r2(S) w2(S) c2 → <b>S = 8</b>, no deadlock.</p>
+</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-C-23</span><span class="q-title">Concurrent bookings on a unique constraint</span><span class="q-tags"><span class="pill lvl">L5</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Scenario.</b> Reception desks A and B both book DrRao at 2026-11-20 10:00 (unique key on doctor + slot_time).</p>
+    <pre><span class="c-com">-- A</span> START TRANSACTION;
+    INSERT INTO u3_appt(doctor, slot_time, patient) VALUES ('DrRao','2026-11-20 10:00:00','Asha');
+<span class="c-com">-- B</span> START TRANSACTION;
+    INSERT INTO u3_appt(doctor, slot_time, patient) VALUES ('DrRao','2026-11-20 10:00:00','Ravi');  <span class="c-err">-- BLOCKS</span>
+<span class="c-com">-- A</span> COMMIT;
+<span class="c-com">-- B now fails:</span>
+<span class="c-err">ERROR 1062 (23000): Duplicate entry 'DrRao-2026-11-20 10:00:00' for key 'u3_appt.uq_doc_slot'</span></pre>
+    <table>
+      <thead><tr><th>Run</th><th>Behaviour</th></tr></thead>
+      <tbody>
+        <tr><td>Run 1 (A commits)</td><td>B waits for A, then gets the duplicate-key error</td></tr>
+        <tr><td>Run 2 (A rolls back)</td><td>B's insert succeeds — Ravi holds the 10:00 slot</td></tr>
+        <tr><td>Run 3 (different slots 10:00 / 10:30)</td><td>No blocking; both succeed</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Expected.</b> After Run 1, B's transaction is still open (a failed statement does not roll
+    back the whole transaction), so B can insert Ravi at 10:30 and commit. Final: <b>Asha 10:00, Ravi 10:30</b>.
+    <em>Oracle:</em> B's identical insert waits, then fails with <code>ORA-00001: unique constraint
+    (SCHEMA.UQ_DOC_SLOT) violated</code>; the same statement-level rollback behaviour applies.</div>
+  </div>
+</div>
+

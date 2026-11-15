@@ -1,0 +1,129 @@
+<!-- ===================== PART 4 ===================== -->
+<h1 class="part" id="part4">Part 4 — Essential SQL Reference</h1>
+<p class="part-lead">A compact, copy-ready reference. Side-by-side differences are marked. All MySQL syntax is 8.0; Oracle is 12c+ unless a version note says otherwise.</p>
+
+<div class="box warn">
+  <span class="box-title">Compatibility flags used throughout</span>
+  <p><b>MySQL:</b> enforced <code>CHECK</code> needs 8.0.16+ · <code>EXPLAIN ANALYZE</code> 8.0.18+ ·
+  <code>EXPLAIN FORMAT=TREE</code> 8.0.16+ · <code>FOR UPDATE NOWAIT / SKIP LOCKED</code> 8.0.1+ ·
+  <code>performance_schema.data_locks</code> 8.0.1+.<br>
+  <b>Oracle:</b> identity columns and <code>FETCH FIRST</code> need 12c+.</p>
+</div>
+
+<h2><span class="num">1.</span>Transaction Control</h2>
+<table>
+  <thead><tr><th>Action</th><th>MySQL</th><th>Oracle</th></tr></thead>
+  <tbody>
+    <tr><td>Begin a transaction</td><td class="mono">START TRANSACTION;</td><td>Implicit at first DML; optionally <span class="mono">SET TRANSACTION READ WRITE;</span></td></tr>
+    <tr><td>Commit</td><td class="mono">COMMIT;</td><td class="mono">COMMIT;</td></tr>
+    <tr><td>Roll back</td><td class="mono">ROLLBACK;</td><td class="mono">ROLLBACK;</td></tr>
+    <tr><td>Savepoint</td><td class="mono">SAVEPOINT s1;</td><td class="mono">SAVEPOINT s1;</td></tr>
+    <tr><td>Partial rollback</td><td class="mono">ROLLBACK TO SAVEPOINT s1;</td><td class="mono">ROLLBACK TO s1;</td></tr>
+    <tr><td>Autocommit</td><td class="mono">SET autocommit = 0|1;</td><td class="mono">SET AUTOCOMMIT ON|OFF;</span> (client setting)</td></tr>
+    <tr><td>Isolation level</td><td class="mono">SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;</td><td class="mono">SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;</td></tr>
+    <tr><td>Row count affected</td><td class="mono">SELECT ROW_COUNT();</td><td class="mono">SQL%ROWCOUNT</span> (inside PL/SQL)</td></tr>
+  </tbody>
+</table>
+
+<pre><span class="c-com">-- Canonical transfer (reset script first: UPDATE u3_account …; COMMIT;)</span>
+<span class="c-com">-- MySQL</span>
+START TRANSACTION;
+UPDATE u3_account SET balance = balance - 2000 WHERE acc_no = 101;
+UPDATE u3_account SET balance = balance + 2000 WHERE acc_no = 102;
+COMMIT;
+
+<span class="c-com">-- Oracle: the same without START TRANSACTION (a transaction starts at the first DML)</span>
+UPDATE u3_account SET balance = balance - 2000 WHERE acc_no = 101;
+UPDATE u3_account SET balance = balance + 2000 WHERE acc_no = 102;
+COMMIT;</pre>
+
+<div class="box warn">
+  <span class="box-title">Two rules that decide most transaction exercises</span>
+  <ul class="tight">
+    <li><b>DDL commits implicitly</b> in both databases — a later ROLLBACK undoes nothing (U3-D-02).</li>
+    <li>A <b>failed statement</b> rolls back only itself; the transaction stays open, so an explicit ROLLBACK/COMMIT
+    is still required (U3-B-04, U3-C-23, U3-D-01).</li>
+  </ul>
+</div>
+
+<h2><span class="num">2.</span>Locking</h2>
+<table>
+  <thead><tr><th>Lock</th><th>MySQL</th><th>Oracle</th></tr></thead>
+  <tbody>
+    <tr><td>Exclusive row lock (read for update)</td><td class="mono">SELECT … WHERE … FOR UPDATE;</td><td class="mono">SELECT … WHERE … FOR UPDATE;</td></tr>
+    <tr><td>Shared row lock</td><td class="mono">SELECT … FOR SHARE;</td><td>Row reads take no lock; use <span class="mono">LOCK TABLE … IN SHARE MODE;</span></td></tr>
+    <tr><td>No wait</td><td class="mono">FOR UPDATE NOWAIT</span> (error 3572)</td><td class="mono">FOR UPDATE NOWAIT</span> (ORA-00054)</td></tr>
+    <tr><td>Timed wait</td><td class="mono">SET innodb_lock_wait_timeout = 3;</td><td class="mono">FOR UPDATE WAIT 3;</span> (ORA-30006)</td></tr>
+    <tr><td>Skip locked rows</td><td class="mono">FOR UPDATE SKIP LOCKED</td><td class="mono">FOR UPDATE SKIP LOCKED</td></tr>
+    <tr><td>Observe locks</td><td class="mono">performance_schema.data_locks</td><td class="mono">v$lock</span> (needs privileges)</td></tr>
+    <tr><td>Deadlock error</td><td class="mono">ERROR 1213 (40001)</td><td class="mono">ORA-00060</td></tr>
+  </tbody>
+</table>
+<pre><span class="c-com">-- MySQL: read a row exclusively, so a second session blocks (the classic lost-update fix)</span>
+START TRANSACTION;
+SELECT balance FROM u3_account WHERE acc_no = 101 FOR UPDATE;
+UPDATE u3_account SET balance = balance - 1000 WHERE acc_no = 101;
+COMMIT;
+
+<span class="c-com">-- MySQL: book the first free seat without racing another session</span>
+SELECT seat_no FROM u3_seat WHERE train_no=12001 AND status='FREE'
+  ORDER BY seat_no LIMIT 1 FOR UPDATE SKIP LOCKED;</pre>
+<div class="box note"><span class="box-title">Oracle restriction worth memorising</span>
+<p>Oracle does <b>not</b> allow a row-limiting clause (<code>FETCH FIRST</code>) together with <code>FOR UPDATE</code>.
+Use a per-row <code>FOR UPDATE NOWAIT</code> loop instead (U3-B-08).</p></div>
+
+<h2><span class="num">3.</span>Indexes and Optimizer Hints</h2>
+<table>
+  <thead><tr><th>Action</th><th>MySQL</th><th>Oracle</th></tr></thead>
+  <tbody>
+    <tr><td>Create index</td><td class="mono">CREATE INDEX idx_sal ON u3_emp(salary);</td><td class="mono">CREATE INDEX idx_sal ON u3_emp(salary);</td></tr>
+    <tr><td>Drop index</td><td class="mono">DROP INDEX idx_sal ON u3_emp;</td><td class="mono">DROP INDEX idx_sal;</td></tr>
+    <tr><td>List indexes</td><td class="mono">SHOW INDEX FROM u3_emp;</td><td class="mono">SELECT index_name FROM user_indexes WHERE table_name='U3_EMP';</td></tr>
+    <tr><td>Refresh statistics</td><td class="mono">ANALYZE TABLE u3_emp;</td><td class="mono">EXEC DBMS_STATS.GATHER_TABLE_STATS(USER,'U3_EMP');</td></tr>
+    <tr><td>Force an index</td><td class="mono">… USE INDEX (idx_ds) …</td><td class="mono">SELECT /*+ INDEX(e idx_ds) */ …</td></tr>
+    <tr><td>Ignore an index</td><td class="mono">… IGNORE INDEX (fk_emp_dept) …</td><td class="mono">SELECT /*+ NO_INDEX(e fk_emp_dept) */ …</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">4.</span>Execution Plans</h2>
+<pre><span class="c-com">-- MySQL</span>
+EXPLAIN SELECT emp_name FROM u3_emp WHERE salary &gt; 99000;
+EXPLAIN FORMAT=TREE  SELECT … ;          <span class="c-com">-- 8.0.16+</span>
+EXPLAIN ANALYZE      SELECT … ;          <span class="c-com">-- 8.0.18+</span>
+
+<span class="c-com">-- Oracle</span>
+EXPLAIN PLAN FOR SELECT emp_name FROM u3_emp WHERE salary &gt; 99000;
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY);</pre>
+<table>
+  <thead><tr><th>What to record</th><th>MySQL column</th><th>Oracle operator</th></tr></thead>
+  <tbody>
+    <tr><td>Access method</td><td class="mono">type</span> (ALL, range, ref, index)</td><td class="mono">TABLE ACCESS FULL / INDEX RANGE SCAN</td></tr>
+    <tr><td>Index used</td><td class="mono">key</td><td>index name in the plan line</td></tr>
+    <tr><td>Estimated rows</td><td class="mono">rows</td><td class="mono">Rows</td></tr>
+    <tr><td>Covering / filter / sort</td><td class="mono">Extra</span> (Using index, Using where, Using filesort, Using index condition)</td><td class="mono">TABLE ACCESS BY INDEX ROWID, SORT ORDER BY STOPKEY, COUNT STOPKEY</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">5.</span>Recovery-Related Commands</h2>
+<table>
+  <thead><tr><th>Purpose</th><th>MySQL</th><th>Oracle</th></tr></thead>
+  <tbody>
+    <tr><td>Durability of the commit log</td><td class="mono">SHOW VARIABLES LIKE 'innodb_flush_log_at_trx_commit';</td><td>—</td></tr>
+    <tr><td>Log sequence number</td><td class="mono">SHOW ENGINE INNODB STATUS\G</span> (LOG section)</td><td>—</td></tr>
+    <tr><td>Row-level change stamp</td><td>—</td><td class="mono">SELECT acc_no, balance, ORA_ROWSCN FROM u3_account;</td></tr>
+    <tr><td>Latest deadlock report</td><td class="mono">SHOW ENGINE INNODB STATUS\G</span> (LATEST DETECTED DEADLOCK)</td><td class="mono">trace file / alert log</td></tr>
+    <tr><td>Kill a session (rolls back its transaction)</td><td class="mono">KILL &lt;connection_id&gt;;</td><td class="mono">ALTER SYSTEM KILL SESSION 'sid,serial#';</td></tr>
+  </tbody>
+</table>
+<pre><span class="c-com">-- Transaction failure recovery, MySQL (the only "recovery" both engines expose to SQL)</span>
+START TRANSACTION;
+SAVEPOINT sp_104;
+INSERT INTO u3_fee_log VALUES (104, 900);
+UPDATE u3_account SET balance = balance - 900 WHERE acc_no = 104;
+<span class="c-err">-- ERROR 3819: Check constraint 'chk_bal' is violated.</span>
+ROLLBACK TO SAVEPOINT sp_104;      <span class="c-com">-- undo this posting only</span>
+COMMIT;                            <span class="c-com">-- keep the earlier postings</span></pre>
+<div class="box note"><span class="box-title">What SQL cannot do</span>
+<p>Neither engine exposes deferred modification, shadow paging, a manual UNDO/REDO pass or a 2PL/TO/OCC scheduler
+switch. Those exercises (C-11 to C-17, C-21, C-22, C-24 to C-29, D-05 to D-22, D-24 to D-27) are paper simulations —
+the SQL half only shows the <em>effects</em> of the recovery machinery.</p></div>
