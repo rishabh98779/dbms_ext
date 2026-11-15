@@ -1,0 +1,249 @@
+<!-- ===================== PART 3 ===================== -->
+<h1 class="part" id="part3">Part 3 — Important Questions &amp; Solutions</h1>
+<p class="part-lead">
+  A representative selection from the 86-question bank. Every entry keeps its <b>original ID</b> (U3-A-01, U3-B-03, …)
+  so you can locate it in the source. Difficulty (L1–L5) and platform tags are as in the original:
+  <span class="pill exe">Executable</span> runs in a real session,
+  <span class="pill my">MySQL</span> / <span class="pill or">Oracle</span> mark platform-specific behaviour, and
+  <span class="pill man">Manual</span> means a paper exercise — no engine exposes these algorithms.
+</p>
+
+<h2 id="p3-a"><span class="num">A.</span>Query Processing &amp; Optimization</h2>
+<p class="small">Statistics: EMP 50,000 tuples / 1,250 blocks; DEPT 10 tuples / 1 block; WORKS 150,000 tuples / 3,000 blocks; PROJ 200 tuples. Block = 4,000 B.</p>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-A-01</span><span class="q-title">Query trees, SQL → relational algebra, selection cascade</span><span class="q-tags"><span class="pill lvl">L1</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Problem.</b> For <code>SELECT emp_name FROM u3_emp WHERE dept_id = 3 AND salary &gt; 90000;</code>
+    write the RA expression, draw the canonical tree, and rewrite the selection as a cascade in both orders.</p>
+    <p><b>Solution.</b></p>
+    <pre>RA:      π_emp_name( σ_(dept_id=3 ∧ salary>90000)(EMP) )
+Cascade 1: π_emp_name( σ_dept_id=3( σ_salary>90000(EMP) ) )
+Cascade 2: π_emp_name( σ_salary>90000( σ_dept_id=3(EMP) ) )</pre>
+    <p>Canonical tree — one conjunctive selection above the leaf:</p>
+    <pre>      π emp_name
+          |
+   σ dept_id=3 ∧ salary>90000
+          |
+         EMP</pre>
+    <p>Both cascades are equivalent to the conjunctive selection (rule: σ<sub>c1∧c2</sub> ≡ σ<sub>c1</sub> ∘ σ<sub>c2</sub>,
+    and the two single-condition selections commute). In each cascade tree the two σ nodes are simply stacked in the
+    order listed.</p>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-A-02</span><span class="q-title">EXPLAIN before and after an index</span><span class="q-tags"><span class="pill lvl">L1</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Problem.</b> Inspect the plan for <code>SELECT emp_name FROM u3_emp WHERE salary &gt; 99000;</code> before
+    and after creating an index on <code>salary</code>.</p>
+    <pre><span class="c-com">-- MySQL</span>
+EXPLAIN SELECT emp_name FROM u3_emp WHERE salary &gt; 99000;
+CREATE INDEX idx_sal ON u3_emp(salary);
+ANALYZE TABLE u3_emp;
+EXPLAIN SELECT emp_name FROM u3_emp WHERE salary &gt; 99000;
+
+<span class="c-com">-- Oracle</span>
+EXPLAIN PLAN FOR SELECT emp_name FROM u3_emp WHERE salary &gt; 99000;
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY);
+CREATE INDEX idx_sal ON u3_emp(salary);
+EXEC DBMS_STATS.GATHER_TABLE_STATS(USER,'U3_EMP');
+EXPLAIN PLAN FOR SELECT emp_name FROM u3_emp WHERE salary &gt; 99000;
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY);</pre>
+    <table>
+      <thead><tr><th>Run</th><th>MySQL</th><th>Oracle</th></tr></thead>
+      <tbody>
+        <tr><td>Before</td><td>type = ALL, rows ≈ 50,000, Using where</td><td>TABLE ACCESS FULL</td></tr>
+        <tr><td>After</td><td>type = range, key = idx_sal, rows ≈ 600–650</td><td>INDEX RANGE SCAN IDX_SAL + TABLE ACCESS BY INDEX ROWID</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Expected.</b> Full scan → index range scan, with a large drop in estimated rows.
+    <p class="small"><b>Related (U3-A-06, FK index behaviour).</b> For the two-table join on <code>dept_id</code>: MySQL already has the FK index <code>fk_emp_dept</code>, so <code>u3_dept</code> usually drives and <code>u3_emp</code> is accessed by <em>ref</em>; with <code>IGNORE INDEX (fk_emp_dept)</code> it falls to a full scan with a join buffer (hash join in 8.0.18+). Oracle has no FK index by default, so creating <code>idx_emp_dept</code> and gathering stats is the comparable step — but Pune is 20&nbsp;% of the data, so a hash join with full scans may still win. The optimizer is cost-based, so record what you see.</p>
+    The ≈ 1.25&nbsp;% figure follows from (99999 − 99000) / 80000. Exact estimates vary with sampled statistics.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-A-03</span><span class="q-title">Selection pushdown and intermediate sizes</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Problem.</b> <code>SELECT e.emp_name, d.dept_name FROM u3_emp e, u3_dept d
+    WHERE e.dept_id=d.dept_id AND d.city='Pune' AND e.salary&gt;50000;</code>
+    2 of 10 departments are in Pune; selectivity of <code>salary&gt;50000</code> is 0.6.
+    Compute the tuples at every node in the initial and the optimized tree, then the reduction.</p>
+    <table>
+      <thead><tr><th>Initial tree (Cartesian product first)</th><th class="c">Tuples</th></tr></thead>
+      <tbody>
+        <tr><td>EMP × DEPT</td><td class="c">50,000 × 10 = 500,000</td></tr>
+        <tr><td>after all selections</td><td class="c">50,000 × 0.2 × 0.6 = 6,000</td></tr>
+      </tbody>
+    </table>
+    <table>
+      <thead><tr><th>Optimized tree (selection pushed down)</th><th class="c">Tuples</th></tr></thead>
+      <tbody>
+        <tr><td>σ<sub>salary&gt;50000</sub>(EMP)</td><td class="c">50,000 × 0.6 = 30,000</td></tr>
+        <tr><td>σ<sub>city='Pune'</sub>(DEPT)</td><td class="c">2</td></tr>
+        <tr><td>Join</td><td class="c">30,000 × (2/10) = 6,000</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Expected.</b> Initial intermediates ≈ 500,000 (+6,000); optimized 30,000 + 2 + 6,000 = 36,002.
+    Comparing the product with the two selected inputs: <b>500,000 / 30,002 ≈ 16.7× reduction</b>.
+    <p class="small"><b>Related (U3-A-16 — classifying conditions).</b> For <span class="mono">SELECT e.emp_name FROM EMP e, WORKS w WHERE e.emp_id=w.emp_id AND e.salary&gt;50000 AND e.dept_id=3 AND w.hours&gt;100 AND w.hours*400 &gt; e.salary</span>: <code>e.salary&gt;50000</code> and <code>e.dept_id=3</code> are single-relation (EMP), <code>w.hours&gt;100</code> is single-relation (WORKS), <code>e.emp_id=w.emp_id</code> is the join condition, and <code>w.hours*400 &gt; e.salary</code> is <b>mixed</b> — it cannot be pushed below the join and is applied immediately after it. Optimized sizes: σ_EMP = 50,000 × 0.6 × 0.1 = 3,000; σ_WORKS = 150,000 × 0.2 = 30,000; join = 30,000 × (3,000/50,000) = 1,800; after the mixed condition = 900. The initial tree must first form a 7.5-billion-tuple product. Leaves kept — EMP: emp_id, emp_name, salary; WORKS: emp_id, hours.</p>
+</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-A-04</span><span class="q-title">Projection pushdown and block estimates</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Problem.</b> For π<sub>emp_name</sub>( EMP ⋈ σ<sub>city='Pune'</sub>(DEPT) ): pushing the projection onto EMP
+    produces a temp relation (emp_name, dept_id) of 40 B/tuple; the final result tuple is 30 B; the join result is
+    10,000 tuples. Compute the blocks of EMP, the temp relation and the output.</p>
+    <pre>EMP            : bf = ⌊4000/100⌋ = 40   → 50,000 / 40  = 1,250 blocks
+Projected temp : bf = ⌊4000/40⌋  = 100  → 50,000 / 100 =   500 blocks
+Final output   : bf = ⌊4000/30⌋  = 133  → ⌈10,000/133⌉ =    76 blocks</pre>
+    <div class="answer"><b>Expected.</b> The projection cuts the join's EMP input from 1,250 to 500 blocks —
+    a saving of <b>750 blocks (60&nbsp;%)</b>.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-A-05</span><span class="q-title">Join ordering — comparing three plans</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Problem.</b> EMP ⋈ WORKS ⋈ σ<sub>loc='Delhi'</sub>(PROJ), with 20 of 200 projects in Delhi.
+    Compute each plan's intermediate sizes and rank them.</p>
+    <table>
+      <thead><tr><th>Plan</th><th class="c">First intermediate</th><th class="c">Second</th><th class="c">Sum</th></tr></thead>
+      <tbody>
+        <tr><td>A: (EMP ⋈ WORKS) ⋈ σPROJ</td><td class="c">150,000</td><td class="c">150,000 × (20/200) = 15,000</td><td class="c">165,000</td></tr>
+        <tr><td>B: (σPROJ ⋈ WORKS) ⋈ EMP</td><td class="c">20 × 750 = 15,000</td><td class="c">15,000</td><td class="c">30,000</td></tr>
+        <tr><td>C: (EMP × σPROJ) ⋈ WORKS</td><td class="c">50,000 × 20 = 1,000,000</td><td class="c">15,000</td><td class="c">1,015,000</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Ranking: B &lt; A &lt; C.</b> Plan B applies the selective filter first, so every join runs on a
+    small input. Plan C forms a Cartesian product and is worst.</div>
+    <p class="small"><b>Related (U3-A-11 — three-way query).</b> For <span class="mono">SELECT p.pname FROM PROJ p, WORKS w, EMP e WHERE p.proj_id=w.proj_id AND w.emp_id=e.emp_id AND e.dept_id=3 AND p.loc='Delhi'</span> (dept_id=3 keeps 1/10 of EMP; 20 of 200 projects are in Delhi), the optimized tree is π_pname( (π(σ_loc='Delhi'(PROJ)) ⋈_proj_id π(WORKS)) ⋈_emp_id π(σ_dept_id=3(EMP)) ). Projection lists — PROJ: proj_id, pname · WORKS: emp_id, proj_id · EMP: emp_id. Intermediate sums: (σPROJ ⋈ WORKS) ⋈ σEMP = 15,000 + 1,500 = 16,500; (σEMP ⋈ WORKS) ⋈ σPROJ = 16,500 (a tie); the Cartesian-first plan = 100,000 + 1,500 = 101,500, about 6× worse.</p>
+
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-A-07</span><span class="q-title">Cost-based optimization — BNL vs index nested loop</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Problem.</b> Cost EMP ⋈ WORKS on emp_id with M = 52 buffer pages. BNL cost =
+    b<sub>outer</sub> + ⌈b<sub>outer</sub>/(M−2)⌉ × b<sub>inner</sub>. A secondary B+ tree on WORKS.emp_id has height 3;
+    each EMP tuple matches 3 WORKS tuples at 1 block I/O per matching tuple. Compare BNL (EMP outer), BNL (WORKS
+    outer) and index nested loop (EMP outer).</p>
+    <pre>(i)  EMP outer   : 1,250 + ⌈1250/50⌉ × 3,000 = 1,250 + 25 × 3,000 =  76,250
+(ii) WORKS outer : 3,000 + ⌈3000/50⌉ × 1,250 = 3,000 + 60 × 1,250 =  78,000
+(iii) Index NL   : 1,250 + 50,000 × (3 + 3)                       = 301,250</pre>
+    <div class="answer"><b>Best is (i) — BNL with EMP as the outer relation.</b> Index nested loop loses because every
+    EMP tuple triggers a probe and the matches are unclustered.</div>
+    <p class="small">Related: <b>U3-A-12</b> uses the same BNL formula (M = 12) to compare pushdown with a temp
+    relation (best: 40,500) against no pushdown (376,250) — a ≈ 9.3× ratio.</p>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-A-08</span><span class="q-title">Access-path selection and break-even point</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Problem.</b> <code>SELECT * FROM EMP WHERE dept_id = 3;</code> returns 5,000 tuples. Three candidate paths:
+    linear scan; secondary (unclustered) B+ tree of height 3 at 1 I/O per record; clustered B+ tree of height 3 with
+    contiguous records. Rank them and find the break-even record count.</p>
+    <pre>Linear scan      : 1,250
+Secondary index  : 3 + 5,000          = 5,003
+Clustered index  : 3 + ⌈5000/40⌉ = 128</pre>
+    <div class="answer"><b>Ranking: clustered (128) &lt; scan (1,250) &lt; secondary (5,003).</b>
+    Break-even: 3 + r = 1,250 → <b>r = 1,247 records</b>. Above that, the linear scan beats the secondary index.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-A-09</span><span class="q-title">Composite index design — column order matters</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Problem.</b> For <code>SELECT COUNT(*) FROM u3_emp WHERE dept_id=3 AND salary BETWEEN 90000 AND 99999;</code>
+    create <code>idx_ds(dept_id, salary)</code> and <code>idx_sd(salary, dept_id)</code>, force each in turn, and name
+    the better index.</p>
+    <pre><span class="c-com">-- MySQL (Oracle uses /*+ INDEX(e idx_ds) */ hints)</span>
+EXPLAIN SELECT COUNT(*) FROM u3_emp USE INDEX (idx_ds) WHERE dept_id=3 AND salary BETWEEN 90000 AND 99999;
+EXPLAIN SELECT COUNT(*) FROM u3_emp USE INDEX (idx_sd) WHERE dept_id=3 AND salary BETWEEN 90000 AND 99999;</pre>
+    <div class="answer"><b>Verdict: idx_ds.
+
+    <p class="small"><b>Related (U3-A-13, subquery vs join).</b> <code>WHERE dept_id IN (SELECT dept_id FROM u3_dept WHERE city='Delhi')</code> and the equivalent join are usually rewritten to the same semijoin by a modern optimizer (MySQL and Oracle both unnest the IN subquery), so the plans are often identical. Delhi holds 3 of 10 departments, so a hash join or a join-buffered scan on EMP is plausible. This is version- and statistics-dependent — record what you observe rather than assuming.</p></b> Equality on the leading column plus a range on the second narrows the
+    index range directly (estimated rows ≈ 5,000 × 12.5&nbsp;% ≈ 600). idx_sd scans the whole salary range
+    (≈ 6,000 entries) and filters dept_id inside the index — about 10× more entries touched. Both are covering for
+    <code>COUNT(*)</code>. Estimates are statistics-dependent.</div>
+    <p class="small"><b>Related (U3-A-14):</b> with <code>idx_ds</code> forced, <code>SELECT dept_id, salary …</code>
+    is answered from the index alone (MySQL <em>Using index</em>; Oracle shows only the INDEX RANGE SCAN), while
+    <code>SELECT emp_name …</code> needs table row lookups (Oracle adds TABLE ACCESS BY INDEX ROWID).</p>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-A-10</span><span class="q-title">Query rewriting and sargability (real-world slow report)</span><span class="q-tags"><span class="pill lvl">L5</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Problem.</b> An HR report on March-2016 hires is slow. Index <code>hire_date</code>, then compare the
+    original function-wrapped predicate with a half-open range rewrite.</p>
+    <pre><span class="c-com">-- original (not sargable: the column is wrapped in a function)</span>
+MySQL : WHERE DATE_FORMAT(hire_date,'%Y-%m') = '2016-03'
+Oracle: WHERE TO_CHAR(hire_date,'YYYY-MM')   = '2016-03'
+<span class="c-com">-- rewrite (sargable: half-open date range)</span>
+MySQL : WHERE hire_date &gt;= '2016-03-01' AND hire_date &lt; '2016-04-01'
+Oracle: WHERE hire_date &gt;= DATE '2016-03-01' AND hire_date &lt; DATE '2016-04-01'</pre>
+    <div class="answer"><b>Original:</b> full scan (or full index scan), ≈ 50,000 estimated rows — the index cannot be
+    range-seeked. <b>Rewrite:</b> MySQL type = range, key = idx_hire, ≈ 500 rows; Oracle INDEX RANGE SCAN IDX_HIRE.
+    The ≈ 1.03&nbsp;% follows from 31 of 3,000 days.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-A-11</span><span class="q-title">Three-way query: heuristic steps, projection lists, sizes</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill man">Manual</span></span></div>
+  <div class="q-body">
+    <p><b>Problem.</b> <code>SELECT p.pname FROM PROJ p, WORKS w, EMP e WHERE p.proj_id=w.proj_id
+    AND w.emp_id=e.emp_id AND e.dept_id=3 AND p.loc='Delhi';</code> dept_id=3 selects 1/10 of EMP;
+    20 of 200 projects are in Delhi. Apply the heuristics and compute intermediate sizes.</p>
+    <pre>Optimized tree:
+π_pname( ( π_(proj_id,pname)(σ_loc='Delhi'(PROJ)) ⋈_proj_id π_(emp_id,proj_id)(WORKS) )
+            ⋈_emp_id π_emp_id(σ_dept_id=3(EMP)) )
+
+Projection lists — PROJ: proj_id, pname · WORKS: emp_id, proj_id · EMP: emp_id</pre>
+    <table>
+      <thead><tr><th>Plan</th><th class="c">First intermediate</th><th class="c">Second</th><th class="c">Sum</th></tr></thead>
+      <tbody>
+        <tr><td>(σPROJ ⋈ WORKS) ⋈ σEMP</td><td class="c">20 × 750 = 15,000</td><td class="c">15,000 × 0.1 = 1,500</td><td class="c">16,500</td></tr>
+        <tr><td>(σEMP ⋈ WORKS) ⋈ σPROJ</td><td class="c">5,000 × 3 = 15,000</td><td class="c">15,000 × (20/200) = 1,500</td><td class="c">16,500</td></tr>
+        <tr><td>σEMP × σPROJ, then ⋈ WORKS</td><td class="c">5,000 × 20 = 100,000</td><td class="c">1,500</td><td class="c">101,500</td></tr>
+      </tbody>
+    </table>
+    <div class="answer"><b>Expected.</b> The first two join orders tie; the Cartesian-first plan is ≈ 6× worse and
+    should be avoided. Heuristic steps in order: split the selection, push <code>dept_id=3</code> to EMP and
+    <code>loc='Delhi'</code> to PROJ, turn the two equalities into joins, run the most selective join first, push projections.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-A-15</span><span class="q-title">Index effect on ORDER BY / top-N queries</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Problem.</b> Run EXPLAIN for the top-10 salaries, create <code>idx_sal(salary)</code>, and repeat.</p>
+    <pre>EXPLAIN SELECT emp_id, salary FROM u3_emp ORDER BY salary DESC LIMIT 10;   <span class="c-com">-- MySQL</span>
+CREATE INDEX idx_sal ON u3_emp(salary);
+EXPLAIN SELECT emp_id, salary FROM u3_emp ORDER BY salary DESC LIMIT 10;
+
+<span class="c-com">-- Oracle (12c+): WHERE salary IS NOT NULL is required, see below</span>
+EXPLAIN PLAN FOR SELECT emp_id, salary FROM u3_emp WHERE salary IS NOT NULL
+                 ORDER BY salary DESC FETCH FIRST 10 ROWS ONLY;</pre>
+    <table>
+      <thead><tr><th>Run</th><th>MySQL</th><th>Oracle</th></tr></thead>
+      <tbody>
+        <tr><td>Before</td><td>type = ALL, Extra: Using filesort, rows ≈ 50,000</td><td>TABLE ACCESS FULL + SORT ORDER BY STOPKEY</td></tr>
+        <tr><td>After</td><td>type = index, key = idx_sal, Extra: Backward index scan</td><td>typically INDEX FULL SCAN DESCENDING IDX_SAL + COUNT STOPKEY (no sort)</td></tr>
+      </tbody>
+    </table>
+    <div class="box warn">
+      <span class="box-title">Why Oracle needs IS NOT NULL</span>
+      <p>Oracle B-tree indexes do not store rows whose indexed key is entirely NULL. <code>salary</code> is nullable,
+      so without the predicate Oracle cannot use the index to return <em>all</em> rows in order. MySQL has no such
+      restriction. Oracle's choice is still cost-based — confirm it in your output.</p>
+    </div>
+  </div>
+</div>
+

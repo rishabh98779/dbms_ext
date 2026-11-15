@@ -1,0 +1,303 @@
+<!-- ===================== PART 1 ===================== -->
+<h1 class="part" id="part1">Part 1 — Essential Concepts</h1>
+<p class="part-lead">Plain-language explanations of the four syllabus sections. Each concept is self-contained: you can read this part without opening the original question bank.</p>
+
+<h2 id="p1-a"><span class="num">A.</span>Query Processing &amp; Optimization</h2>
+
+<div class="box def">
+  <span class="box-title">Definition — Query processing</span>
+  <p>The steps a DBMS performs to turn an SQL statement into a result: <b>parsing</b> → <b>validation</b> →
+  <b>relational-algebra translation</b> → <b>optimization</b> (choose the cheapest plan) → <b>code generation</b> →
+  <b>execution</b>. The <b>optimizer</b> is the part that matters for this unit.</p>
+</div>
+
+<h3>1. Query trees</h3>
+<p>A query tree (expression tree / evaluation tree) is a diagram of a relational-algebra expression. <b>Leaves</b> are
+base relations, <b>internal nodes</b> are operators (σ selection, π projection, ⋈ join, × Cartesian product),
+and the root produces the final result. Data flows <b>bottom-up</b>; each node's output is the next node's input.</p>
+<p>The <b>initial (canonical) tree</b> is a literal translation of the SQL: Cartesian products first, then one big
+selection, then a projection at the top. It is correct but almost never efficient. The <b>optimized tree</b> is the
+same expression rewritten by heuristic rules so that small intermediate results are produced as early as possible.</p>
+
+<h3>2. Heuristic (rule-based) optimization — the standard step sequence</h3>
+<ol class="tight">
+  <li><b>Break up conjunctive selections:</b> σ<sub>(c1 ∧ c2)</sub> becomes σ<sub>c1</sub>(σ<sub>c2</sub>(R)) — a cascade.</li>
+  <li><b>Push selections down</b> the tree as far as the conditions allow (toward the leaves).</li>
+  <li><b>Replace Cartesian products + selection by joins:</b> σ<sub>R.a=S.b</sub>(R × S) ⇒ R ⋈<sub>a=b</sub> S.</li>
+  <li><b>Order the joins</b> so the most selective (smallest-result) join runs first.</li>
+  <li><b>Push projections down</b> to keep only the attributes needed above (reduces tuple width and block count).</li>
+  <li><b>Combine</b> cascaded selections/projections into a single operation where possible.</li>
+</ol>
+
+<div class="box tip">
+  <span class="box-title">Key idea</span>
+  <p>Every heuristic step preserves the <b>result set</b> but changes the <b>cost</b>. The goal is always the same:
+  make the intermediate relations as small as possible as early as possible.</p>
+</div>
+
+<h3>3. Which conditions can be pushed where</h3>
+<table>
+  <thead><tr><th>Condition type</th><th>Example</th><th>Can be pushed?</th></tr></thead>
+  <tbody>
+    <tr><td><b>Single-relation</b></td><td><code>e.dept_id = 3</code></td><td>Yes — push onto that relation's leaf.</td></tr>
+    <tr><td><b>Join condition</b></td><td><code>e.emp_id = w.emp_id</code></td><td>Yes — becomes the join predicate.</td></tr>
+    <tr><td><b>Mixed</b> (spans two relations, non-equality)</td><td><code>w.hours*400 &gt; e.salary</code></td><td>No — applied <em>immediately after</em> the join.</td></tr>
+  </tbody>
+</table>
+<p>Missing this distinction is a classic exam error: a mixed condition cannot be pushed below the join that
+supplies both of its relations.</p>
+
+<h3>4. Cost-based optimization</h3>
+<p>When several equivalent plans survive the heuristics, the optimizer estimates each plan's cost using
+<b>catalog statistics</b> (tuple counts, block counts, blocking factor, index heights, distinct values) and picks the
+cheapest. Cost is usually measured in <b>block (page) I/O</b>, sometimes with CPU cost added.</p>
+
+<div class="box def">
+  <span class="box-title">Definition — Selectivity</span>
+  <p><b>Selectivity</b> = the fraction of tuples that satisfy a predicate. A predicate with selectivity 0.1 keeps
+  10&nbsp;% of the rows. The <b>result cardinality</b> = (input tuples) × (selectivity). With several independent
+  conditions, multiply the selectivities.</p>
+</div>
+
+<h3>5. Access paths and indexes</h3>
+<p>For a single-table selection the optimizer chooses between:</p>
+<ul class="tight">
+  <li><b>Linear (full) scan</b> — read every block of the relation.</li>
+  <li><b>Clustered index</b> — records of a key value are stored physically together, so a range reads few blocks.</li>
+  <li><b>Secondary (unclustered) index</b> — each matching record can sit in a different block: roughly <b>one I/O per record</b>.</li>
+  <li><b>Covering index</b> — the index alone holds all needed columns, so the table is never touched.</li>
+</ul>
+<p>A <b>sargable</b> predicate lets the index be used for a range seek. Wrapping the indexed column in a function
+(<code>DATE_FORMAT(hire_date,...)</code>, <code>TO_CHAR(...)</code>) destroys sargability and forces a scan — the classic
+slow-report bug.</p>
+
+<h3>6. Join ordering</h3>
+<p>Joins are commutative and associative, so the same query has many join orders. The optimizer estimates each
+order's intermediate sizes and picks the one with the smallest total. A plan that forms a Cartesian product early
+is almost always the worst.</p>
+
+<hr class="soft">
+
+<h2 id="p1-b"><span class="num">B.</span>Transaction Processing</h2>
+
+<div class="box def">
+  <span class="box-title">Definition — Transaction</span>
+  <p>A <b>transaction</b> is a logical unit of work: a sequence of operations that must be treated as a single,
+  indivisible action. It ends with <b>COMMIT</b> (make permanent) or <b>ROLLBACK</b> (undo everything).</p>
+</div>
+
+<h3>1. The ACID properties</h3>
+<table>
+  <thead><tr><th>Property</th><th>Meaning</th><th>How the unit demonstrates it</th></tr></thead>
+  <tbody>
+    <tr><td><b>Atomicity</b></td><td>All operations happen, or none do.</td><td>A failed debit triggers ROLLBACK; a transfer never half-completes.</td></tr>
+    <tr><td><b>Consistency</b></td><td>A transaction moves the database from one valid state to another.</td><td>A <code>CHECK</code> constraint rejects a negative balance.</td></tr>
+    <tr><td><b>Isolation</b></td><td>Concurrent transactions do not see each other's partial work.</td><td>Two-session exercises: snapshots, dirty reads, lost updates.</td></tr>
+    <tr><td><b>Durability</b></td><td>Committed changes survive a crash.</td><td>Write-ahead logging; REDO of committed work.</td></tr>
+  </tbody>
+</table>
+
+<h3>2. Transaction control statements</h3>
+<ul class="tight">
+  <li><b>START TRANSACTION</b> (MySQL) / first DML (Oracle) — begins a transaction.</li>
+  <li><b>COMMIT</b> — makes all changes permanent and releases locks.</li>
+  <li><b>ROLLBACK</b> — undoes all changes since the transaction began.</li>
+  <li><b>SAVEPOINT</b> <em>name</em> / <b>ROLLBACK TO SAVEPOINT</b> <em>name</em> — partial rollback: undo only back to the marker.</li>
+</ul>
+
+<div class="box warn">
+  <span class="box-title">Trap — DDL commits implicitly</span>
+  <p>In <b>both</b> MySQL and Oracle, a DDL statement (<code>CREATE</code>, <code>ALTER</code>, <code>DROP</code>) commits the
+  current transaction implicitly. A later ROLLBACK has nothing left to undo. This is why “I rolled back but the change
+  stayed” happens after an <code>ALTER</code>.</p>
+</div>
+
+<h3>3. Isolation levels and the anomalies they permit</h3>
+<table>
+  <thead><tr><th>Level</th><th>Dirty read</th><th>Non-repeatable read</th><th>Phantom</th></tr></thead>
+  <tbody>
+    <tr><td><b>READ UNCOMMITTED</b></td><td class="c">Possible</td><td class="c">Possible</td><td class="c">Possible</td></tr>
+    <tr><td><b>READ COMMITTED</b> <span class="small">(Oracle default)</span></td><td class="c">No</td><td class="c">Possible</td><td class="c">Possible</td></tr>
+    <tr><td><b>REPEATABLE READ</b> <span class="small">(MySQL default)</span></td><td class="c">No</td><td class="c">No</td><td class="c">Possible*</td></tr>
+    <tr><td><b>SERIALIZABLE</b></td><td class="c">No</td><td class="c">No</td><td class="c">No</td></tr>
+  </tbody>
+</table>
+<p class="small">* InnoDB's REPEATABLE READ blocks the phantom for the same snapshot via next-key/gap locking; a
+non-locking read still returns the snapshot count, while a locking read sees the current data.</p>
+
+<div class="box def">
+  <span class="box-title">Definitions — the three anomalies</span>
+  <ul class="tight">
+    <li><b>Dirty read</b> — reading data written by another transaction that has not yet committed.</li>
+    <li><b>Non-repeatable read</b> — the same row returns different values when read twice in one transaction.</li>
+    <li><b>Phantom</b> — re-running the same <em>query</em> returns new rows inserted by another transaction.</li>
+  </ul>
+</div>
+
+<h3>4. The lost-update problem</h3>
+<p>Two transactions read the same value, each computes a new value from it, and both write back. The second write
+overwrites the first, so one update is lost. The cure is to lock the row while it is read:
+<code>SELECT ... FOR UPDATE</code> (exclusive) so the second transaction blocks until the first commits.</p>
+
+<h3>5. Autocommit</h3>
+<p>When <b>autocommit = 1</b> (MySQL default), every statement commits immediately, so a lone <code>ROLLBACK</code> does
+nothing. <code>START TRANSACTION</code> suspends autocommit for the duration of that one transaction, which is why the
+rollback then works. Oracle's <code>SET AUTOCOMMIT ON/OFF</code> is a <em>client</em> setting, not a database one.</p>
+
+<hr class="soft">
+
+<h2 id="p1-c"><span class="num">C.</span>Concurrency Control</h2>
+
+<h3>1. Schedules and notation</h3>
+<p>A <b>schedule</b> is an interleaving of the operations of several transactions, read left to right in time order.
+Notation: <code>r1(A)</code> = T1 reads A; <code>w1(A)</code> = T1 writes A; <code>c1</code> = T1 commits;
+<code>a1</code> = T1 aborts. Two operations <b>conflict</b> if they belong to different transactions, access the
+<b>same item</b>, and at least one is a <b>write</b>. Read/read pairs never conflict.</p>
+
+<h3>2. Conflict serializability and precedence graphs</h3>
+<p>Build a <b>precedence graph</b>: a node per transaction, and an edge T<sub>i</sub> → T<sub>j</sub> whenever an operation of
+T<sub>i</sub> precedes a conflicting operation of T<sub>j</sub>. The schedule is <b>conflict serializable</b> iff the graph is
+<b>acyclic</b>. A topological order of the graph is an equivalent serial order.</p>
+
+<div class="box def">
+  <span class="box-title">Definition — View serializability</span>
+  <p>A schedule is <b>view serializable</b> if it is view-equivalent to some serial schedule: the same transaction reads
+  each item's <b>initial value</b>, every read <b>reads from</b> the same write, and the same transaction performs each
+  item's <b>final write</b>. Every conflict-serializable schedule is view serializable, but not the reverse — the gap is
+  closed by <b>blind writes</b> (a write not preceded by a read of that item in the same transaction).</p>
+</div>
+
+<h3>3. Recoverability classes</h3>
+<table>
+  <thead><tr><th>Class</th><th>Condition</th><th>Prevents</th></tr></thead>
+  <tbody>
+    <tr><td><b>Recoverable</b></td><td>If T<sub>j</sub> reads from T<sub>i</sub>, then c<sub>i</sub> must come before c<sub>j</sub>.</td><td>Committing a transaction whose input was rolled back.</td></tr>
+    <tr><td><b>Cascadeless</b> (avoids cascading rollback)</td><td>Every read is of a value written by a <em>committed</em> transaction.</td><td>A chain of rollbacks when one transaction aborts.</td></tr>
+    <tr><td><b>Strict</b></td><td>No transaction reads or writes an item until the last writer of that item has committed or aborted.</td><td>Dirty reads and cascading rollback; also simplifies recovery.</td></tr>
+  </tbody>
+</table>
+<p class="small">Strict ⇒ cascadeless ⇒ recoverable. The implications do not run the other way.</p>
+
+<h3>4. Lock-based concurrency control</h3>
+<ul class="tight">
+  <li><b>Shared lock S(X)</b> — read access; several transactions may hold S on the same item.</li>
+  <li><b>Exclusive lock X(X)</b> — write access; held by exactly one transaction.</li>
+  <li><b>Compatibility:</b> S/S compatible; S/X and X/X conflict. A conflicting request <b>blocks</b>.</li>
+</ul>
+<table>
+  <thead><tr><th>Held \ Requested</th><th class="c">S</th><th class="c">X</th></tr></thead>
+  <tbody>
+    <tr><td><b>S</b></td><td class="c">Granted</td><td class="c">Blocked</td></tr>
+    <tr><td><b>X</b></td><td class="c">Blocked</td><td class="c">Blocked</td></tr>
+  </tbody>
+</table>
+
+<h3>5. Two-phase locking (2PL)</h3>
+<p>A transaction has a <b>growing phase</b> (only acquiring locks) and a <b>shrinking phase</b> (only releasing).
+The moment it holds all its locks and begins releasing is the <b>lock point</b>. Plain 2PL guarantees conflict
+serializability but not recoverability. <b>Strict 2PL</b> holds all <b>exclusive</b> locks until commit/abort —
+that guarantees both serializability and strictness, and is what real engines implement.</p>
+
+<div class="box warn">
+  <span class="box-title">Trap — 2PL vs strict 2PL</span>
+  <p>A transaction that releases a lock <em>before</em> commit satisfies 2PL but not strict 2PL (e.g. <code>X(A) … U(A) … c</code>).
+  Releasing a shared lock early is allowed by both; releasing an exclusive lock early breaks strictness only.</p>
+</div>
+
+<h3>6. Deadlock</h3>
+<p>A <b>deadlock</b> is a cycle in the <b>wait-for graph</b> (edge T<sub>i</sub> → T<sub>j</sub> when T<sub>i</sub> waits for a lock held by
+T<sub>j</sub>). Handled by:</p>
+<ul class="tight">
+  <li><b>Detection + recovery</b> — detect the cycle and abort a <b>victim</b> (usually the youngest, or the lowest rollback cost).</li>
+  <li><b>Prevention by timestamp</b> — <b>Wait-Die</b>: older requester waits, younger requester dies. <b>Wound-Wait</b>: older requester wounds (aborts) the younger holder, younger requester waits.</li>
+  <li><b>Timeout</b> — a blocked request gives up after a fixed wait (MySQL <code>innodb_lock_wait_timeout</code>).</li>
+</ul>
+
+<h3>7. Timestamp ordering (TO)</h3>
+<p>Each transaction gets a timestamp TS(T). Each item X keeps <b>R-TS(X)</b> (largest timestamp of a reader) and
+<b>W-TS(X)</b> (largest timestamp of a writer). Operations run only if they arrive in timestamp order; otherwise the
+transaction <b>aborts and restarts</b> with a new timestamp. No locks, so no deadlock — but possibly many restarts.</p>
+<div class="box def">
+  <span class="box-title">Thomas Write Rule</span>
+  <p>A refinement: if <b>TS(T) &lt; W-TS(X)</b> but TS(T) ≥ R-TS(X), the write is <b>obsolete</b> — ignore it and continue
+  instead of aborting. It changes only the stale blind-write case and makes some non-serializable schedules acceptable.</p>
+</div>
+
+<h3>8. Optimistic concurrency control (validation)</h3>
+<p>Transactions run freely in a <b>read phase</b>, then pass a <b>validation phase</b> before writing. Each transaction
+has a <b>ReadSet</b> and <b>WriteSet</b>. T<sub>j</sub> validates against every earlier-validated T<sub>i</sub>: it passes if either
+<b>finish(T<sub>i</sub>) &lt; start(T<sub>j</sub>)</b>, or <b>start(T<sub>j</sub>) &lt; finish(T<sub>i</sub>) &lt; validation(T<sub>j</sub>)</b> and
+<b>WriteSet(T<sub>i</sub>) ∩ ReadSet(T<sub>j</sub>) = ∅</b>. Otherwise it aborts.</p>
+
+<hr class="soft">
+
+<h2 id="p1-d"><span class="num">D.</span>Database Recovery</h2>
+
+<h3>1. Failures</h3>
+<ul class="tight">
+  <li><b>Transaction failure</b> — a bad statement or explicit ROLLBACK. The engine undoes the transaction; the database stays available.</li>
+  <li><b>System failure (crash)</b> — power loss or software crash. Volatile memory is lost; the log on disk survives.</li>
+  <li><b>Media failure</b> — disk damage; needs a backup restore plus log replay.</li>
+</ul>
+
+<h3>2. The log and write-ahead logging</h3>
+<p>A <b>log</b> is an append-only record of every change. <b>Write-ahead logging (WAL)</b> is the rule that the log record
+for a change must reach stable storage <b>before</b> the changed page is written to disk. This is what makes recovery
+possible: the log can always reconstruct or undo a change.</p>
+
+<table>
+  <thead><tr><th>Log record</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">&lt;T,start&gt; / &lt;T,commit&gt;</td><td>Transaction begins / commits</td></tr>
+    <tr><td class="mono">&lt;T,X,new&gt;</td><td>Deferred-modification write record (new value only)</td></tr>
+    <tr><td class="mono">&lt;T,X,old,new&gt;</td><td>Immediate-modification write record</td></tr>
+    <tr><td class="mono">&lt;T,X,old&gt;</td><td>UNDO-only write record</td></tr>
+    <tr><td class="mono">&lt;T,X,V&gt; during rollback</td><td>Redo-only compensation record</td></tr>
+    <tr><td class="mono">&lt;checkpoint {list}&gt;</td><td>Checkpoint; <em>list</em> = active transactions</td></tr>
+    <tr><td class="mono">&lt;T,abort&gt;</td><td>Rollback complete (all old values already restored)</td></tr>
+  </tbody>
+</table>
+
+<h3>3. The four update strategies</h3>
+<table>
+  <thead><tr><th>Strategy</th><th>When data reaches disk</th><th>Recovery action</th></tr></thead>
+  <tbody>
+    <tr><td><b>Deferred</b></td><td>Only after commit</td><td><b>REDO</b> committed transactions only (forward scan, log order). No UNDO.</td></tr>
+    <tr><td><b>Immediate</b></td><td>Any time (even uncommitted)</td><td><b>UNDO</b> uncommitted (backward), then <b>REDO</b> committed (forward).</td></tr>
+    <tr><td><b>UNDO-only</b></td><td>Every write forced before its commit record</td><td><b>UNDO</b> uncommitted only (backward).</td></tr>
+    <tr><td><b>Shadow paging</b></td><td>Commit switches a root pointer</td><td>No log: use whichever page table the root designates.</td></tr>
+  </tbody>
+</table>
+
+<div class="box tip">
+  <span class="box-title">The two recovery passes (immediate modification)</span>
+  <p><b>Pass 1 — UNDO</b>: scan the log <em>backward</em>; for every transaction with a start but no commit/abort, restore
+  each item's <b>old value</b>. <b>Pass 2 — REDO</b>: scan <em>forward</em>; for every committed transaction, re-apply
+  each <b>new value</b> in log order. UNDO must go backward so the earliest old value wins.</p>
+</div>
+
+<h3>4. Checkpoints</h3>
+<p>At a checkpoint, all log records and all modified pages are forced to disk. Benefits:</p>
+<ul class="tight">
+  <li>A transaction that <b>committed before</b> the checkpoint needs <b>no</b> recovery action.</li>
+  <li>Recovery only has to scan the log from the <b>earliest start of a transaction active at the checkpoint</b> onward.</li>
+  <li>Under deferred modification, a transaction active at the checkpoint that later commits must still be redone
+  <b>from its first write</b>, because nothing of it was on disk.</li>
+</ul>
+
+<h3>5. Shadow paging</h3>
+<p>The database keeps two page tables: the <b>current</b> table (for the active transaction) and the <b>shadow</b> table
+(the committed state). A modified page is copied to a new location, and the current table is updated. <b>Commit</b>
+makes the current table the shadow table (one atomic pointer switch). A <b>crash before commit</b> simply discards the
+current table — no undo is needed. The cost is that committed data ends up scattered and needs periodic garbage
+collection.</p>
+
+<div class="box warn">
+  <span class="box-title">Trap — recovery order and direction</span>
+  <ul class="tight">
+    <li>UNDO is always <b>backward</b> (latest log entry first). Running it forward leaves the wrong value.</li>
+    <li>REDO is always <b>forward</b> in log order, so the last write to an item wins.</li>
+    <li>A transaction with an <b>abort</b> record is already complete: neither undo nor redo it.</li>
+    <li>UNDO and REDO write <b>absolute</b> values, so repeating them is harmless (idempotent).</li>
+  </ul>
+</div>

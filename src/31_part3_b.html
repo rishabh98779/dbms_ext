@@ -1,0 +1,205 @@
+<h2 id="p3-b"><span class="num">B.</span>Transaction Processing</h2>
+<p class="small">All Section B questions are executable. Run the reset script (<code>UPDATE u3_account …; COMMIT;</code>) before each exercise. Starting balances: 101 = 10000, 102 = 5000, 103 = 20000, 104 = 800.</p>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-B-01</span><span class="q-title">COMMIT — a multi-row transfer</span><span class="q-tags"><span class="pill lvl">L1</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Task.</b> Transfer 2,000 from 101 to 102 in one transaction and commit; display all balances.</p>
+    <pre>START TRANSACTION;
+UPDATE u3_account SET balance = balance - 2000 WHERE acc_no = 101;
+UPDATE u3_account SET balance = balance + 2000 WHERE acc_no = 102;
+COMMIT;
+SELECT * FROM u3_account;</pre>
+    <div class="answer"><b>Expected:</b> 101 = 8000, 102 = 7000, 103 = 20000, 104 = 800.
+    <em>Oracle:</em> identical, minus <code>START TRANSACTION</code> (a transaction begins at the first DML;
+    optionally <code>SET TRANSACTION READ WRITE;</code> first).</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-B-02</span><span class="q-title">ROLLBACK — atomicity</span><span class="q-tags"><span class="pill lvl">L1</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Task.</b> Debit 3,000 from 101, SELECT, ROLLBACK, SELECT again.</p>
+    <pre>START TRANSACTION;
+UPDATE u3_account SET balance = balance - 3000 WHERE acc_no = 101;
+SELECT balance FROM u3_account WHERE acc_no = 101;   <span class="c-ok">-- 7000 inside the transaction</span>
+ROLLBACK;
+SELECT balance FROM u3_account WHERE acc_no = 101;   <span class="c-ok">-- 10000 after rollback</span></pre>
+    <div class="box note"><span class="box-title">Oracle note</span>
+    <p>Same without <code>START TRANSACTION</code>. If a worksheet auto-commits each statement, run the whole sequence
+    as one script or PL/SQL block, otherwise the ROLLBACK has nothing to undo.</p></div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-B-03</span><span class="q-title">SAVEPOINT and partial rollback (with a consistency flaw to spot)</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Task.</b> In one transaction: debit 101 by 1,000 → SAVEPOINT s1 → credit 102 by 1,000 → SAVEPOINT s2 →
+    debit 103 by 5,000 → ROLLBACK TO s2 → credit 104 by 500 → COMMIT. Then compare the total of all balances.</p>
+    <pre>START TRANSACTION;
+UPDATE u3_account SET balance=balance-1000 WHERE acc_no=101;
+SAVEPOINT s1;
+UPDATE u3_account SET balance=balance+1000 WHERE acc_no=102;
+SAVEPOINT s2;
+UPDATE u3_account SET balance=balance-5000 WHERE acc_no=103;
+ROLLBACK TO SAVEPOINT s2;
+UPDATE u3_account SET balance=balance+500  WHERE acc_no=104;
+COMMIT;
+SELECT *, (SELECT SUM(balance) FROM u3_account) AS total FROM u3_account;</pre>
+    <div class="answer"><b>Expected:</b> 101 = 9000, 102 = 6000, 103 = 20000, 104 = 1300. Total <b>36,300</b>
+    against 35,800 initially. <b>Flaw:</b> the 500 credit to 104 has no matching debit, so the transaction violates
+    conservation of money. Rolling back to s2 undid only the 103 debit.</div>
+    <p class="small"><b>Related (U3-B-09, SAVEPOINT name reuse):</b> debit 101 by 1,000 → SAVEPOINT a → credit 102 by 500 → <b>SAVEPOINT a again</b> → credit 103 by 500 → ROLLBACK TO a → COMMIT. Final: 101 = 9000, 102 = 5500, 103 = 20000, 104 = 800. Re-issuing <code>SAVEPOINT a</code> <b>replaces</b> the earlier savepoint of that name in both databases, so only the 103 credit was undone.</p>
+
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-B-04</span><span class="q-title">ACID — atomicity and consistency through a constraint failure</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Task.</b> Transfer 1,000 from 104 (balance 800) to 101 by crediting 101 first, then debiting 104.
+    Record the error, inspect the intermediate state, then ROLLBACK.</p>
+    <pre>START TRANSACTION;
+UPDATE u3_account SET balance=balance+1000 WHERE acc_no=101;
+UPDATE u3_account SET balance=balance-1000 WHERE acc_no=104;   <span class="c-err">-- fails (balance would be -200)</span>
+SELECT acc_no,balance FROM u3_account WHERE acc_no IN (101,104);
+ROLLBACK;
+SELECT acc_no,balance FROM u3_account WHERE acc_no IN (101,104);</pre>
+    <table>
+      <thead><tr><th>Stage</th><th>101</th><th>104</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>Intermediate</td><td class="c">11000</td><td class="c">800</td><td>Credit still pending; only the failed statement is undone, not the transaction</td></tr>
+        <tr><td>After ROLLBACK</td><td class="c">10000</td><td class="c">800</td><td>Atomicity restored</td></tr>
+      </tbody>
+    </table>
+    <div class="box warn"><span class="box-title">Error text</span>
+    <p>MySQL: <code>ERROR 3819 (HY000): Check constraint 'chk_bal' is violated.</code><br>
+    Oracle: <code>ORA-02290: check constraint (…CHK_BAL) violated</code></p></div>
+
+    <p class="small"><b>Related (U3-B-11, bulk update and rollback).</b> Record <code>SUM(salary)</code> for dept_id = 4, then in one transaction give the department a 10&nbsp;% raise: <code>ROW_COUNT()</code> reports <b>5,000 rows</b>, and the sum inside the transaction is exactly 1.10 × the original (salaries are whole numbers, so ×1.10 gives exact two-decimal values). After ROLLBACK the sum is back to the original — atomicity across many rows. Oracle reports “5000 rows updated”, or use <code>SQL%ROWCOUNT</code> in a block.</p>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-B-05</span><span class="q-title">Isolation — two sessions, two isolation levels</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Task.</b> Run the timeline below in two sessions, once per isolation level, and record what A sees at
+    steps 1 and 3.</p>
+    <table>
+      <thead><tr><th class="c">Step</th><th>Session A</th><th>Session B</th></tr></thead>
+      <tbody>
+        <tr><td class="c">1</td><td>Start a transaction; SELECT balance for 101</td><td>—</td></tr>
+        <tr><td class="c">2</td><td>—</td><td>Debit 101 by 2,000; COMMIT</td></tr>
+        <tr><td class="c">3</td><td>SELECT balance for 101 again</td><td>—</td></tr>
+      </tbody>
+    </table>
+    <table>
+      <thead><tr><th>Mode</th><th class="c">A at step 1</th><th class="c">A at step 3</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>MySQL REPEATABLE READ (default)</td><td class="c">10000</td><td class="c">10000</td><td>Consistent snapshot from the transaction's first read</td></tr>
+        <tr><td>MySQL READ COMMITTED</td><td class="c">10000</td><td class="c">8000</td><td>Each statement sees the latest committed data</td></tr>
+        <tr><td>Oracle READ COMMITTED (default)</td><td class="c">10000</td><td class="c">8000</td><td>Same as MySQL READ COMMITTED</td></tr>
+        <tr><td>Oracle SERIALIZABLE</td><td class="c">10000</td><td class="c">10000</td><td>Snapshot isolation; a later UPDATE fails with ORA-08177</td></tr>
+      </tbody>
+    </table>
+    <p class="small"><b>Extension.</b> In the serializable run, letting A attempt <code>UPDATE … WHERE acc_no=101</code>
+    after step 3 fails with <code>ORA-08177: can't serialize access for this transaction</code>.</p>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-B-06</span><span class="q-title">Lost update and row locking</span><span class="q-tags"><span class="pill lvl">L3</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Part 1 — no locks.</b> Both sessions read 101's balance (10000). A writes 9000 and commits; B writes 10500
+    and commits.</p>
+    <div class="answer"><b>Final 10500 — A's debit is lost</b>, because B overwrote it from a stale read.</div>
+    <p><b>Part 2 — with <code>SELECT … FOR UPDATE</code>.</b></p>
+    <pre><span class="c-com">-- A</span> START TRANSACTION; SELECT balance FROM u3_account WHERE acc_no=101 FOR UPDATE;  <span class="c-ok">-- 10000</span>
+<span class="c-com">-- B</span> START TRANSACTION; SELECT balance FROM u3_account WHERE acc_no=101 FOR UPDATE;  <span class="c-err">-- B BLOCKS</span>
+<span class="c-com">-- A</span> UPDATE u3_account SET balance=balance-1000 WHERE acc_no=101; COMMIT;
+<span class="c-com">-- B</span> <span class="c-ok">-- unblocks, reads 9000</span>
+       UPDATE u3_account SET balance=balance+500 WHERE acc_no=101; COMMIT;</pre>
+    <div class="answer"><b>Final 9500.</b> B waited for A's exclusive lock. In MySQL, B errors with
+    <code>1205</code> if A holds the lock past <code>innodb_lock_wait_timeout</code> (default 50 s).
+    Oracle uses the same syntax and B also waits.</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-B-07</span><span class="q-title">Multi-table transaction with conditional stock deduction</span><span class="q-tags"><span class="pill lvl">L4</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Task.</b> Use conditional updates (<code>… AND stock &gt;= qty</code>) and check the affected-row count.
+    Txn 1 orders Laptop ×3 and Mouse ×10; Txn 2 orders Mouse ×5 then Laptop ×3, and rolls back the whole transaction
+    if any line affects 0 rows. Stock starts Laptop = 5, Mouse = 50.</p>
+    <pre>START TRANSACTION;                                    <span class="c-com">-- Txn 1</span>
+UPDATE u3_product SET stock=stock-3  WHERE prod_id=1 AND stock&gt;=3;   <span class="c-ok">-- 1 row</span>
+INSERT INTO u3_orders(prod_id,qty) VALUES (1,3);
+UPDATE u3_product SET stock=stock-10 WHERE prod_id=2 AND stock&gt;=10;  <span class="c-ok">-- 1 row</span>
+INSERT INTO u3_orders(prod_id,qty) VALUES (2,10);
+COMMIT;
+
+START TRANSACTION;                                    <span class="c-com">-- Txn 2</span>
+UPDATE u3_product SET stock=stock-5 WHERE prod_id=2 AND stock&gt;=5;    <span class="c-ok">-- 1 row</span>
+UPDATE u3_product SET stock=stock-3 WHERE prod_id=1 AND stock&gt;=3;    <span class="c-err">-- 0 rows (stock = 2)</span>
+ROLLBACK;</pre>
+    <div class="answer"><b>Expected.</b> After Txn 1: Laptop = 2, Mouse = 40, 2 order rows. After Txn 2:
+    <b>unchanged</b> — the Mouse deduction and its order row were undone together with the failed Laptop line.</div>
+    <p class="small"><b>Oracle (Txn 2 as PL/SQL):</b> check <code>SQL%ROWCOUNT = 0</code> after each update and
+    <code>ROLLBACK; RETURN;</code> — same outcome.</p>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-B-08</span><span class="q-title">Concurrent seat booking — SKIP LOCKED vs NOWAIT</span><span class="q-tags"><span class="pill lvl">L5</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Problem.</b> Two agents book the first available seat on train 12001 at the same moment. Neither may get the
+    other's seat.</p>
+    <pre><span class="c-com">-- MySQL, session A</span>
+START TRANSACTION;
+SELECT seat_no FROM u3_seat WHERE train_no=12001 AND status='FREE'
+  ORDER BY seat_no LIMIT 1 FOR UPDATE SKIP LOCKED;      <span class="c-ok">-- 1</span>
+UPDATE u3_seat SET status='BOOKED', passenger='Asha' WHERE train_no=12001 AND seat_no=1;
+
+<span class="c-com">-- MySQL, session B (before A commits) — skips the locked seat</span>
+SELECT seat_no FROM u3_seat WHERE train_no=12001 AND status='FREE'
+  ORDER BY seat_no LIMIT 1 FOR UPDATE SKIP LOCKED;      <span class="c-ok">-- 2</span>
+UPDATE u3_seat SET status='BOOKED', passenger='Ravi' WHERE train_no=12001 AND seat_no=2;</pre>
+    <div class="answer"><b>Expected.</b> seat 1 = Asha, seat 2 = Ravi, seats 3–6 FREE. Without <code>SKIP LOCKED</code>,
+    B's <code>SELECT … FOR UPDATE</code> waits on A's lock on seat 1 until A commits or the 1205 timeout fires.</div>
+    <div class="box warn"><span class="box-title">Why Oracle is different</span>
+    <p>Oracle does not allow a row-limiting clause together with <code>FOR UPDATE</code>, so there is no direct
+    equivalent of <code>ORDER BY … LIMIT 1 FOR UPDATE SKIP LOCKED</code>. The unit uses a per-seat
+    <code>FOR UPDATE NOWAIT</code> loop instead: A locks seat 1; B's attempt on seat 1 raises
+    <code>ORA-00054: resource busy and acquire with NOWAIT specified</code>, so B falls back to seat 2.
+    A cursor-based <code>FOR UPDATE SKIP LOCKED</code> would lock every free seat when opened, leaving B nothing.</p>
+    <p class="small"><b>Related (U3-B-12, three-statement atomic transaction).</b> Txn X: Mouse ×4 (price 500) — insert order, decrement stock guarded by <code>stock &gt;= 4</code>, debit 101 by 2,000; commit → Mouse = 46, 1 order row, account 101 = 8,000. Txn Y: Laptop ×1 (price 55,000) — the debit fails with <b>ERROR 3819</b>, so ROLLBACK leaves everything unchanged. The next <code>order_id</code> <b>skips</b> the value consumed by Y's rolled-back insert: AUTO_INCREMENT / identity values are not rolled back, which is not an atomicity failure.</p>
+</div>
+  </div>
+</div>
+
+<div class="q">
+  <div class="q-head"><span class="q-id">U3-B-10</span><span class="q-title">When a transaction really starts — autocommit</span><span class="q-tags"><span class="pill lvl">L2</span><span class="pill exe">Executable</span></span></div>
+  <div class="q-body">
+    <p><b>Task.</b> Test the effect of autocommit on ROLLBACK.</p>
+    <pre>SET autocommit = 1;
+UPDATE u3_account SET balance = balance - 1000 WHERE acc_no = 101;
+ROLLBACK;
+SELECT balance FROM u3_account WHERE acc_no = 101;    <span class="c-ok">-- 9000 (already committed)</span>
+
+SET autocommit = 0;
+UPDATE u3_account SET balance = balance - 1000 WHERE acc_no = 101;
+ROLLBACK;
+SELECT balance FROM u3_account WHERE acc_no = 101;    <span class="c-ok">-- 9000</span>
+
+SET autocommit = 1;
+START TRANSACTION;
+UPDATE u3_account SET balance = balance - 1000 WHERE acc_no = 101;
+ROLLBACK;
+SELECT balance FROM u3_account WHERE acc_no = 101;    <span class="c-ok">-- 10000 (rollback worked)</span></pre>
+    <div class="answer"><b>Expected.</b> With autocommit = 1 a lone ROLLBACK does nothing. <code>START TRANSACTION</code>
+    suspends autocommit for that one transaction, so the rollback works. <em>Oracle:</em>
+    <code>SET AUTOCOMMIT ON/OFF</code> — a <em>client</em> feature, not a database one; a browser worksheet's behaviour
+    depends on the tool, so record what yours does.</div>
+  </div>
+</div>
+
